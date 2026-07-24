@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Beacons go to the ROASSensor collector over HTTPS. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Reading the GAID on Android 12+ requires this normal-level permission.
+         Omit it (or the host app can revoke it) to run without an ad id — the
+         SDK degrades to referrer-only attribution rather than failing. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+</manifest>
