@@ -1,6 +1,7 @@
 plugins {
     id("com.android.library") version "8.5.0"
     id("org.jetbrains.kotlin.android") version "1.9.24"
+    id("maven-publish")
 }
 
 android {
@@ -43,4 +44,22 @@ dependencies {
     // Pure-JVM unit tests (Hashing has no Android deps) — verifies byte-for-byte
     // parity with the backend using vectors generated from security.py.
     testImplementation("junit:junit:4.13.2")
+}
+
+// JitPack (and later Maven Central) both need a real Maven publication to build
+// from — not just the `singleVariant("release")` hook above, which only makes
+// the AAR *component* available. `afterEvaluate` is required here because the
+// release component doesn't exist until the Android Gradle Plugin has finished
+// configuring the module.
+afterEvaluate {
+    publishing {
+        publications {
+            register("release", MavenPublication::class) {
+                from(components["release"])
+                groupId = "com.roassensor"
+                artifactId = "roas"
+                version = "0.1.0"
+            }
+        }
+    }
 }
