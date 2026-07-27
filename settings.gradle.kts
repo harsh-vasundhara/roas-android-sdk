@@ -13,6 +13,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Testing the hosted SDK build — remove once Maven Central is live.
+        maven { url = uri("https://jitpack.io") }
     }
 }
 

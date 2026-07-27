@@ -14,8 +14,13 @@ import org.json.JSONObject
  * Roas.identify(email = "buyer@example.com")
  *
  * // pass the visitor id to RevenueCat so purchases attribute to this install
- * Purchases.configure(PurchasesConfiguration.Builder(this, rcApiKey)
- *     .appUserID(Roas.visitorId()).build())
+ * // (requires "com.revenuecat.purchases:purchases:10.15.1" or later; the
+ * // exact same call is exercised in sample/MainActivity.kt)
+ * Purchases.configure(
+ *     PurchasesConfiguration.Builder(this, revenueCatApiKey)
+ *         .appUserID(Roas.visitorId())
+ *         .build()
+ * )
  * ```
  *
  * On first launch it reports the install — reading the Play install referrer and

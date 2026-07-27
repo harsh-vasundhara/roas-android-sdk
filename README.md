@@ -11,16 +11,32 @@ so ROAS stays defensible.
 
 ## Install
 
-Published as an AAR (module `:roas`). With a Maven/JitPack coordinate:
+Published as an AAR (module `:roas`), currently hosted on JitPack while Maven
+Central publishing is being set up under the `com.roassensor` namespace. Once
+that lands, this becomes `com.roassensor:roas:<version>` with no extra
+repository line needed (`mavenCentral()` is already in every Android project).
 
 ```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://jitpack.io") }
+    }
+}
+```
+```kotlin
+// app/build.gradle.kts
 dependencies {
-    implementation("com.roassensor:roas-android:0.1.0")
+    implementation("com.github.harsh-vasundhara:roas-android-sdk:main-SNAPSHOT")
 }
 ```
 
 Requires `minSdk 21`. Play Services (`play-services-ads-identifier`) is optional —
-without it the SDK still works, just referrer-only (no GAID).
+without it the SDK still works, just referrer-only (no GAID). If you also add
+RevenueCat (below), note its AAR requires `minSdk 23` — bump your app's `minSdk`
+accordingly; this SDK's own floor stays 21 for apps that skip RevenueCat.
 
 ## Usage
 
@@ -44,18 +60,37 @@ Roas.identify(email = "buyer@example.com")
 Roas.track(RoasEvent.ADD_TO_CART, properties = mapOf("sku" to "ABC", "qty" to 1))
 Roas.track(RoasEvent.CUSTOM, name = "boss_defeated")
 
-// Attribute purchases: pass the vid to RevenueCat as the app user id
+// Attribute purchases: pass the vid to RevenueCat as the app user id.
+// Requires "com.revenuecat.purchases:purchases:10.15.1" (or later) and,
+// as above, minSdk 23+ in the app consuming this.
+Purchases.logLevel = LogLevel.DEBUG // useful while wiring this up; drop in release
 Purchases.configure(
-    PurchasesConfiguration.Builder(this, "revenuecat_public_key")
+    PurchasesConfiguration.Builder(this, revenueCatApiKey)
         .appUserID(Roas.visitorId())
         .build()
+)
+
+// Later, to actually test a purchase (needs a real Play Console product
+// synced to RevenueCat — see sample/MainActivity.kt for the full, verified
+// fetch-offerings + purchase flow):
+Purchases.sharedInstance.getOfferingsWith(
+    onError = { error -> /* ... */ },
+    onSuccess = { offerings ->
+        val pkg = offerings.current?.availablePackages?.firstOrNull() ?: return@getOfferingsWith
+        Purchases.sharedInstance.purchaseWith(
+            PurchaseParams.Builder(this, pkg).build(),
+            onError = { error, userCancelled -> /* ... */ },
+            onSuccess = { _, customerInfo -> /* ... */ }
+        )
+    }
 )
 ```
 
 Configure your RevenueCat webhook to point at
-`https://<api>/api/tracking/webhooks/revenuecat/<public_key>` and the purchase
-lands as revenue, attributed via the `appUserID` (= our vid) or the `$idfa`
-subscriber attribute.
+`https://<api>/api/tracking/webhooks/revenuecat/<public_key>`, with the
+Authorization header value set on your Site in the ROASSensor panel's "Connect
+revenue" step. The purchase lands as revenue, attributed via the `appUserID`
+(= our vid) or the `$idfa`/`$gpsAdId` subscriber attribute.
 
 ## How attribution works (the deterministic path)
 
@@ -80,14 +115,19 @@ subscriber attribute.
 
 ## Building & testing
 
+From the repo root:
+
 ```bash
-cd sdk-android
 ./gradlew :roas:testDebugUnitTest   # runs the JVM hash-parity tests
 ./gradlew :roas:assembleRelease     # builds the AAR
+./gradlew :sample:assembleDebug     # builds the test app (tracking + RevenueCat)
 ```
 
 Open the folder in Android Studio to develop. The hash-parity tests are pure JVM
 (no device/emulator needed) and are the guard that keeps identity matching working.
+`sample/` is the verified reference implementation for both the tracking calls
+and the RevenueCat purchase flow — copy from it rather than the snippets above
+if the two ever drift.
 
 ## Roadmap (this SDK)
 
