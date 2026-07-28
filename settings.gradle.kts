@@ -12,9 +12,7 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
-        mavenCentral()
-        // Testing the hosted SDK build — remove once Maven Central is live.
-        maven { url = uri("https://jitpack.io") }
+        mavenCentral() // hosts com.roassensor:roas since 2026-07-28
     }
 }
 

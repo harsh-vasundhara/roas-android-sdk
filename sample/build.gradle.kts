@@ -31,10 +31,10 @@ android {
 }
 
 dependencies {
-    // Swapped from `project(":roas")` to the hosted JitPack coordinate —
+    // Swapped from `project(":roas")` to the hosted Maven Central coordinate —
     // proves the *published* artifact resolves and works, not just local source.
     // Revert to `project(":roas")` once back to normal local development.
-    implementation("com.github.harsh-vasundhara:roas-android-sdk:5a38d82779")
+    implementation("com.roassensor:roas:0.1.0")
     // RevenueCat's Android SDK — proves the purchase -> webhook -> our backend
     // path end to end. Optional at the tracking level: the ROASSensor buttons
     // above work with no RevenueCat key configured at all.
