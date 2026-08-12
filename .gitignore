@@ -7,3 +7,7 @@ build/
 /captures
 .externalNativeBuild
 .cxx
+
+# Release signing secrets — never commit these.
+sample/release.keystore.jks
+sample/keystore.properties

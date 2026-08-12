@@ -6,6 +6,17 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.revenuecat.purchases.CustomerInfo
+import com.revenuecat.purchases.LogLevel
+import com.revenuecat.purchases.Offerings
+import com.revenuecat.purchases.Package
+import com.revenuecat.purchases.PurchaseParams
+import com.revenuecat.purchases.Purchases
+import com.revenuecat.purchases.PurchasesConfiguration
+import com.revenuecat.purchases.PurchasesError
+import com.revenuecat.purchases.interfaces.PurchaseCallback
+import com.revenuecat.purchases.interfaces.ReceiveOfferingsCallback
+import com.revenuecat.purchases.models.StoreTransaction
 import com.roassensor.sdk.Roas
 import com.roassensor.sdk.RoasEvent
 
@@ -31,7 +42,12 @@ class MainActivity : Activity() {
     // 2) An app property's public key (Site with platform=android) from the panel.
     private val publicKey = "360bd19f-b945-4c44-a410-8f9f14390cce"
 
+    // 3) RevenueCat's public Google API key for this project (Project settings → API keys).
+    //    Not the same as the publicKey above — that one is ours, this one is RevenueCat's.
+    private val revenueCatApiKey = "YOUR-REVENUECAT-PUBLIC-SDK-KEY"
+
     private lateinit var log: TextView
+    private lateinit var root: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,7 +55,16 @@ class MainActivity : Activity() {
         // This reports the install (first launch) and flushes any queued beacons.
         Roas.initialize(this, publicKey = publicKey, baseUrl = baseUrl)
 
-        val root = LinearLayout(this).apply {
+        // appUserID = our vid, so the purchase RevenueCat's webhook reports later
+        // carries the exact visitor whose ad click drove the install.
+        Purchases.logLevel = LogLevel.DEBUG
+        Purchases.configure(
+            PurchasesConfiguration.Builder(this, revenueCatApiKey)
+                .appUserID(Roas.visitorId())
+                .build()
+        )
+
+        root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 72, 48, 48)
         }
@@ -63,6 +88,7 @@ class MainActivity : Activity() {
         root.addView(button("Show visitor id") {
             append("vid = ${Roas.visitorId()}")
         })
+        root.addView(button("RevenueCat: fetch offerings") { fetchOfferings() })
 
         root.addView(ScrollView(this).apply { addView(log) })
         setContentView(root)
@@ -75,4 +101,44 @@ class MainActivity : Activity() {
         }
 
     private fun append(line: String) = log.append("$line\n")
+
+    // Pulls the current Offering's packages from RevenueCat and adds one "Buy"
+    // button per package below the fetch button, so a real purchase is one tap
+    // away once a product exists in Play Console + RevenueCat.
+    private fun fetchOfferings() {
+        Purchases.sharedInstance.getOfferings(object : ReceiveOfferingsCallback {
+            override fun onReceived(offerings: Offerings) {
+                val current = offerings.current
+                if (current == null) {
+                    append("→ offerings: none configured yet (check RevenueCat dashboard)")
+                    return
+                }
+                append("→ offerings: '${current.identifier}' has ${current.availablePackages.size} package(s)")
+                for (pkg in current.availablePackages) {
+                    root.addView(button("Buy: ${pkg.identifier} (${pkg.product.price.formatted})") {
+                        buyPackage(pkg)
+                    })
+                }
+            }
+
+            override fun onError(error: PurchasesError) {
+                append("→ offerings error: ${error.message}")
+            }
+        })
+    }
+
+    private fun buyPackage(pkg: Package) {
+        Purchases.sharedInstance.purchase(
+            PurchaseParams.Builder(this, pkg).build(),
+            object : PurchaseCallback {
+                override fun onCompleted(purchase: StoreTransaction, customerInfo: CustomerInfo) {
+                    append("→ purchase completed: ${purchase.productIds} (vid=${Roas.visitorId()})")
+                }
+
+                override fun onError(error: PurchasesError, userCancelled: Boolean) {
+                    append(if (userCancelled) "→ purchase cancelled" else "→ purchase error: ${error.message}")
+                }
+            }
+        )
+    }
 }

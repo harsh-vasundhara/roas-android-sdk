@@ -8,4 +8,21 @@
          Omit it (or the host app can revoke it) to run without an ad id — the
          SDK degrades to referrer-only attribution rather than failing. -->
     <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+
+    <!-- Android 11+ package visibility hides other installed apps by default,
+         and querying a hidden one throws NameNotFoundException rather than
+         returning null. We read the Play Store's own version because THAT — not
+         the Android release — is what gates the Install Referrer API, and it is
+         the difference between "this device's Play Store is too old to answer"
+         and "this install was genuinely organic". Declaring one package is the
+         narrow form of this permission: it grants visibility of Play only, not
+         the <queries> wildcard. -->
+    <queries>
+        <package android:name="com.android.vending" />
+        <!-- Play SERVICES, a different package from the Play Store above and the
+             answer to a different question: it is what `AdvertisingIdClient`
+             binds to, so its version is what separates "the user opted out of
+             the ad id" from "this device's Play Services is stale or absent". -->
+        <package android:name="com.google.android.gms" />
+    </queries>
 </manifest>

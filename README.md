@@ -11,13 +11,17 @@ so ROAS stays defensible.
 
 ## Install
 
-Published as an AAR (module `:roas`). With a Maven/JitPack coordinate:
+Published as an AAR on Maven Central (as of 2026-07-28), module `:roas`:
 
 ```kotlin
 dependencies {
-    implementation("com.roassensor:roas-android:0.1.0")
+    implementation("com.roassensor:roas:0.1.2")
 }
 ```
+
+> 0.1.1 is the newest version on Maven Central (since 2026-08-03). **0.1.2 is
+> not published yet** — until it is, resolve it from `mavenLocal()` after
+> running `./gradlew :roas:publishToMavenLocal` here.
 
 Requires `minSdk 21`. Play Services (`play-services-ads-identifier`) is optional —
 without it the SDK still works, just referrer-only (no GAID).
@@ -77,6 +81,13 @@ subscriber attribute.
   it. Add/keep the `com.google.android.gms.permission.AD_ID` permission to use it.
 - Delivery is a persisted, idempotent queue: an install that happens offline is
   reported on the next launch, never lost or double-counted.
+- The device context (model, manufacturer, OS/API level, Play Store version,
+  form factor, installer, locale, timezone, screen size) is **coarse and
+  non-identifying** — every value is shared by millions of devices, and it is
+  deliberately not a fingerprint: nothing here probes canvas, WebGL, audio, or
+  sensors, and no serial, IMEI, `ANDROID_ID`, or MAC is read. It exists to
+  answer "which device models fail to attribute", not to recognise a person.
+  The GAID above remains the only device identifier, and it stays opt-out-able.
 
 ## Building & testing
 
@@ -88,6 +99,51 @@ cd sdk-android
 
 Open the folder in Android Studio to develop. The hash-parity tests are pure JVM
 (no device/emulator needed) and are the guard that keeps identity matching working.
+
+## Diagnosing an install that didn't attribute
+
+Every install reports **why** it did or didn't get a referrer, and **what
+device** it was on. That combination is the whole point: the Play catalog is
+~18,600 Android models, a QA rack is eight, and the failures cluster on the
+models a small rack is least likely to hold — the Galaxy M32 and Tab S6 Lite
+referrer failures had to be found by borrowing handsets one at a time.
+
+`referrer_status` values, in order of what they mean:
+
+| Status | Meaning | Retried? |
+| --- | --- | --- |
+| `OK` | A real referrer — our `rsclid` or a campaign name came through. | — |
+| `OK_ORGANIC` | Play's `utm_medium=organic`. Nobody clicked an ad; this is a true answer, **not** a broken device. | — |
+| `OK_NOT_SET` | Play returned `(not set)` — it had nothing to give, so the referrer was dropped between click and install. **This is the Galaxy M32 / Tab S6 Lite failure.** | No — Play bakes the referrer at install time. |
+| `OK_EMPTY` | Read succeeded, referrer was blank. | No |
+| `FEATURE_NOT_SUPPORTED` | That device's **Play Store app** is older than the Install Referrer API. Disproportionately tablets and rarely-updated budget/enterprise phones. | No |
+| `SERVICE_UNAVAILABLE` / `SERVICE_DISCONNECTED` / `EXCEPTION:*` | Play Services wasn't ready. Most likely on the first cold launch after a store install, more likely still on a slow tablet. | **Yes**, up to 5 launches |
+| `RETRY_OK…` | A retry recovered the referrer, sent as an `app_open`. Attributes identically; the prefix records that the first read failed. | — |
+| `DEVELOPER_ERROR` / `PERMISSION_ERROR` | Our bug or a blocked permission. | No |
+
+Alongside it every install carries `device_model` (`Build.MODEL`, e.g.
+`SM-P613` — the key a Play device-catalog export joins on),
+`device_manufacturer`, `os_version`, `api_level`, `device_type`,
+`installer_package`, `sdk_version`, and — most usefully — `store_version`.
+
+**`store_version` is the one that matters.** The Install Referrer API is gated
+on the **Play Store app's** version (roughly 8.3.73+), *not* the Android
+release. That is why a stale tablet fails while a phone on the same Android
+version succeeds, and why `os_version` alone will mislead you.
+
+```python
+# Which devices are we losing, and why?
+from django.db.models import Count
+from apps.tracking.models import TouchPoint
+(TouchPoint.objects
+  .filter(event_type=TouchPoint.EventType.INSTALL, site__public_key="<key>")
+  .values("device_manufacturer", "device_model", "device_type",
+          "os_version", "store_version", "referrer_status")
+  .annotate(n=Count("id")).order_by("-n"))
+```
+
+`OK*` over total is your real Android attribution coverage — per device, in
+production, instead of per handset you can physically borrow.
 
 ## Roadmap (this SDK)
 
