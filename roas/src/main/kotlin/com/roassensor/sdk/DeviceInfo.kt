@@ -25,7 +25,7 @@ internal object DeviceInfo {
 
     /** This SDK's own version, sent on every install so a bad row can be traced
      *  to the build that produced it. Bump with the version in build.gradle.kts. */
-    const val SDK_VERSION = "0.1.4"
+    const val SDK_VERSION = "0.1.5"
 
     private const val PLAY_STORE_PACKAGE = "com.android.vending"
     private const val PLAY_SERVICES_PACKAGE = "com.google.android.gms"

@@ -31,6 +31,10 @@ internal class Transport(
     /** Run work off the main thread (blocking reads like the GAID lookup). */
     fun background(block: () -> Unit) = executor.execute(block)
 
+    /** Test-only: stop the delivery executor so a torn-down [Roas] singleton
+     *  can't leak a background thread that races a later test's server. */
+    internal fun shutdown() = executor.shutdownNow()
+
     fun send(path: String, body: JSONObject) {
         val entry = JSONObject()
             .put("url", base + path)
@@ -43,11 +47,22 @@ internal class Transport(
 
     fun flush() {
         executor.execute {
-            val remaining = mutableListOf<String>()
+            val delivered = mutableListOf<String>()
             for (entry in storage.queuedBeacons()) {
-                if (!post(entry)) remaining.add(entry) // couldn't deliver → keep
+                if (post(entry)) delivered.add(entry)
             }
-            storage.replaceQueue(remaining)
+            // Removes exactly the delivered entries from whatever the queue
+            // holds AT REMOVAL TIME, rather than overwriting it with the
+            // "remaining" list computed from the read above. Two sends fired
+            // back-to-back from the same caller (Roas.sendSessionStart does
+            // exactly this for its app_open + deferred-link pair) each queue
+            // their own flush(); with a blind overwrite, the SECOND send's
+            // enqueue() could land between this flush's read and its
+            // writeback and be silently wiped by it — confirmed live: it was
+            // losing the deferred-link beacon outright. removeDelivered
+            // re-reads fresh, so a beacon enqueued mid-flush by another call
+            // survives.
+            storage.removeDelivered(delivered)
         }
     }
 

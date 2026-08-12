@@ -25,4 +25,28 @@
              the ad id" from "this device's Play Services is stale or absent". -->
         <package android:name="com.google.android.gms" />
     </queries>
+
+    <application>
+        <!-- The legacy INSTALL_REFERRER broadcast — several OEM app stores
+             (Huawei AppGallery, Xiaomi GetApps, Vivo App Store, Samsung Galaxy
+             Store, Amazon Appstore) still send it for compatibility with older
+             marketing SDKs, even though it predates Google's own Install
+             Referrer API. InstallReferrerReader only ever asks Play; an install
+             from any other store gets FEATURE_NOT_SUPPORTED from that API and
+             nothing else, indistinguishable from organic, unless this catches
+             it instead. Must be manifest-declared (not runtime-registered): the
+             broadcast can arrive before the app has ever been launched, and
+             only a manifest receiver gets a fresh process spun up to deliver
+             it. exported="true" is required (Android 12+ mandates an explicit
+             value on any component with an intent-filter) and is correct here
+             regardless: the sender is another app (the store), so this must be
+             reachable across the process boundary. -->
+        <receiver
+            android:name=".InstallReferrerBroadcastReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.android.vending.INSTALL_REFERRER" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

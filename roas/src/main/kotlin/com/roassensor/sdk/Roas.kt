@@ -112,6 +112,7 @@ object Roas {
         appContext = context.applicationContext
         this.publicKey = publicKey
         storage = Storage(appContext)
+        resetIfDataWasResurrected()
         transport = Transport(baseUrl, storage, appSecret)
         sessions = SessionTracker(storage)
         initialized = true
@@ -143,6 +144,11 @@ object Roas {
             // permanent, because installReported was set regardless of whether
             // the read succeeded. Give it another try here.
             if (storage.referrerPending) retryReferrer()
+            // A separate, cheaper check: the legacy INSTALL_REFERRER broadcast
+            // (see InstallReferrerBroadcastReceiver) can race the very first
+            // open by a few seconds, including on a device where Play will
+            // NEVER have an answer (a non-Play-Store install).
+            if (storage.awaitingBroadcastReferrer) checkForLateBroadcastReferrer()
             if (customerUserId != null) identify(customerUserId = customerUserId)
         }
     }
@@ -234,6 +240,48 @@ object Roas {
         transport.send("/api/tracking/mobile/first-open", body)
     }
 
+    /**
+     * Test-only: tears the singleton back down so each test starts from a
+     * clean slate. [Roas] is a process-wide object precisely because
+     * [initialize] is meant to run exactly once per real process — but that
+     * same property means test frameworks that reuse one JVM/classloader
+     * across `@Test` methods (Robolectric does, within one test class) see
+     * every call after the first silently no-op on the `initialized` guard
+     * unless something resets it between tests. Never called from production
+     * code.
+     */
+    internal fun resetForTests() {
+        if (initialized) transport.shutdown()
+        initialized = false
+        logLevel = RoasLogLevel.ERROR
+        deliveryCallback = null
+    }
+
+    /**
+     * Detect a device whose private app data survived an actual OS-level
+     * reinstall — confirmed live on a Vivo device, where uninstalling and
+     * reinstalling through the on-device UI kept handing back the same `vid`
+     * and `installReported=true` (see [Storage.firstInstallTime]'s doc for
+     * the full story). `PackageManager.firstInstallTime` lives outside the
+     * app's private data directory, so it changes on every genuine install
+     * regardless of what SharedPreferences claims — a mismatch here is
+     * unambiguous proof this is not the same install [Storage] thinks it is.
+     * Best-effort: a `PackageManager` read that fails leaves [storage]
+     * untouched rather than risking a false reset.
+     */
+    private fun resetIfDataWasResurrected() {
+        val actual = try {
+            appContext.packageManager.getPackageInfo(appContext.packageName, 0).firstInstallTime
+        } catch (t: Throwable) {
+            0L
+        }
+        if (actual <= 0L) return
+        if (storage.firstInstallTime != actual) {
+            storage.resetForNewInstall()
+            storage.firstInstallTime = actual
+        }
+    }
+
     /** The opening beacon for a session that is not an install. */
     private fun sendSessionStart(session: SessionTracker.Session) {
         val body = baseBody()
@@ -244,6 +292,24 @@ object Roas {
             .put("session_number", session.number)
         DeviceInfo.describe(appContext, body)
         transport.send("/api/tracking/mobile/first-open", body)
+
+        // Best-effort same-IP deferred match. A user who was ALREADY
+        // installed when they tapped an ad link never gets an install beacon
+        // (Play only hands a referrer to a fresh install) and, unless the
+        // link happened to be a verified Android App Link routed straight
+        // into the app, handleDeepLink is never called either — most
+        // `/c/<slug>` redirects just reopen an already-installed app with no
+        // URI reaching it at all. Confirmed live: an ad click 38 seconds
+        // before a plain app_open left the resulting touchpoint with zero
+        // campaign data, even though the click itself was logged correctly
+        // from the same IP. The backend already has a same-IP match for
+        // exactly this (MobileDeferredLinkView, gated behind
+        // Site.allow_probabilistic) but nothing ever called it outside of a
+        // fresh install. Safe to call unconditionally: the server no-ops
+        // when the site hasn't opted in, and it only ever backfills a touch
+        // that is still missing ad context, so it can never overwrite a real
+        // signal — see `_deferred_link_match` on the backend.
+        transport.send("/api/tracking/mobile/deferred-link", JSONObject().put("site", publicKey).put("vid", storage.visitorId))
     }
 
     /**
@@ -281,25 +347,39 @@ object Roas {
 
     /**
      * Forward a direct deep link (an Android App Link that opened this app
-     * while it was already installed) so its `rsclid` attributes this open
-     * deterministically — the Android twin of `Roas.swift`'s
+     * while it was already installed) so its campaign context attributes this
+     * open deterministically — the Android twin of `Roas.swift`'s
      * `handleDeepLink`. This is a *different* case from the Play Install
      * Referrer (that's the *install*; this is a later open of an app that
-     * was already on the device). A no-op if the URL carries no `rsclid`.
+     * was already on the device). A no-op if the URL carries no query string
+     * at all.
+     *
+     * The FULL query string is forwarded as `install_referrer`, not just
+     * `rsclid` — confirmed missing by a live emulator test: a link carrying
+     * `rsclid=X&utm_source=meta&rs_campaign=summer_sale` used to reach the
+     * backend as `install_referrer=rsclid=X`, silently dropping the
+     * utm_source/rs_campaign context that `services/ingest.py` is fully able
+     * to extract (it runs the identical parser it uses on a Play referrer or
+     * a web landing_url). Worse, gating on `rsclid` specifically meant a
+     * marketer's own link using `gclid`/`fbclid` instead — which
+     * `CLICK_ID_PARAMS` on the backend already recognizes — was dropped
+     * outright with no beacon sent at all. Forwarding the raw query string
+     * whenever ANY is present lets the same server-side extraction that
+     * already handles every click-id type do its job here too.
      */
     @JvmStatic
     fun handleDeepLink(url: String) {
         if (!initialized) return
-        val rsclid = try {
-            Uri.parse(url).getQueryParameter("rsclid")
+        val query = try {
+            Uri.parse(url).query
         } catch (e: Exception) {
             null
         }
-        if (rsclid.isNullOrEmpty()) return
+        if (query.isNullOrEmpty()) return
         val body = baseBody()
             .put("os", "Android")
             .put("event_type", "app_open")
-            .put("install_referrer", "rsclid=$rsclid") // server lifts it like a Play referrer
+            .put("install_referrer", query) // server lifts click id + utm/rs_* context, same as a Play referrer
         DeviceInfo.describe(appContext, body)
         transport.send("/api/tracking/mobile/first-open", body)
     }
@@ -318,10 +398,6 @@ object Roas {
                 val body = baseBody()
                     .put("os", "Android")
                     .put("app_version", appVersion())
-                    // Sent even on failure — this is what makes "why did this
-                    // device never get a referrer" answerable from the backend
-                    // instead of needing that device's own Logcat.
-                    .put("referrer_status", result.status)
                     // The install IS session 1's opening touch, so it carries the
                     // session's pv_id: the closing beacon then folds foreground
                     // time into this row instead of writing an app_open next to it.
@@ -333,7 +409,21 @@ object Roas {
                 DeviceInfo.describe(appContext, body)
                 gaid?.let { body.put("device_id", it) } // raw; the server hashes it
                 appSetId?.let { body.put("app_set_id", it) } // raw; the server SALT-hashes it
-                result.referrer?.let { body.putReferrer(it) }
+                // referrer_status sent even on failure — this is what makes "why
+                // did this device never get a referrer" answerable from the
+                // backend instead of needing that device's own Logcat. Falls
+                // back to the legacy INSTALL_REFERRER broadcast (non-Play
+                // stores) when Play itself came back with nothing — see
+                // ReferrerFallback for why Play's own answer always wins when
+                // it has one.
+                val decision = ReferrerFallback.decide(result, storage.broadcastReferrer)
+                body.put("referrer_status", decision.status)
+                if (result.referrer != null) {
+                    body.putReferrer(result.referrer)
+                } else if (decision.broadcastReferrer != null) {
+                    body.put("install_referrer", decision.broadcastReferrer)
+                    storage.broadcastReferrer = "" // consumed
+                }
                 customerUserId?.let { body.put("external_id", it) }
                 transport.send("/api/tracking/mobile/first-open", body)
 
@@ -347,6 +437,10 @@ object Roas {
                 storage.referrerPending =
                     result.referrer == null && InstallReferrerReader.isTransient(result.status)
                 storage.referrerAttempts = 0
+                // Only worth a later look if NEITHER source came through — Play
+                // gave nothing AND the broadcast hasn't arrived yet either.
+                storage.awaitingBroadcastReferrer =
+                    result.referrer == null && decision.broadcastReferrer == null
             }
         }
     }
@@ -390,6 +484,32 @@ object Roas {
                 }
             }
         }
+    }
+
+    /**
+     * A last check for the legacy `INSTALL_REFERRER` broadcast (see
+     * [InstallReferrerBroadcastReceiver]), for when it raced the very first
+     * launch's own install beacon and arrived a few seconds too late.
+     *
+     * Checked once on the next launch, then given up regardless of outcome.
+     * Unlike [retryReferrer] this never re-queries anything — a local
+     * SharedPreferences read costs nothing, so there is no [MAX_REFERRER_ATTEMPTS]-
+     * style budget to spend — but an install that genuinely has no referrer
+     * from any source must not be checked on every launch for its whole life.
+     */
+    private fun checkForLateBroadcastReferrer() {
+        storage.awaitingBroadcastReferrer = false
+        val broadcast = storage.broadcastReferrer
+        if (broadcast.isEmpty()) return
+        storage.broadcastReferrer = "" // consumed
+        val body = baseBody()
+            .put("os", "Android")
+            .put("event_type", "app_open")
+            .put("app_version", appVersion())
+            .put("referrer_status", "OK_BROADCAST_LATE")
+            .put("install_referrer", broadcast)
+        DeviceInfo.describe(appContext, body)
+        transport.send("/api/tracking/mobile/first-open", body)
     }
 
     /** The referrer fields, written the same way from both the first-open and

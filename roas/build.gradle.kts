@@ -33,6 +33,11 @@ android {
     kotlinOptions {
         jvmTarget = "1.8"
     }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
     // Variant publishing is configured below via mavenPublishing's own
     // AndroidSingleVariantLibrary — NOT here too. The vanniktech plugin
     // calls `singleVariant("release")` itself; declaring it a second time
@@ -52,6 +57,20 @@ dependencies {
     // Pure-JVM unit tests (Hashing has no Android deps) — verifies byte-for-byte
     // parity with the backend using vectors generated from security.py.
     testImplementation("junit:junit:4.13.2")
+
+    // Robolectric runs Android framework classes (Context, SharedPreferences,
+    // Application.ActivityLifecycleCallbacks, Resources/Locale/TimeZone) on the
+    // JVM, which is what RoasTest needs: Roas.kt's install/session/lifecycle
+    // logic is the most complex, most bug-prone surface in this SDK (two real
+    // production regressions already traced to it — see the 0.1.4 changelog
+    // above) and had zero automated coverage before this.
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
+    // A real local HTTP server for Transport to POST to, so tests exercise the
+    // actual HttpURLConnection path end-to-end (request body, headers, retry
+    // behaviour) instead of a hand-rolled Transport fake that could silently
+    // drift from what the real one does.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
 
 // Publishing to Maven Central (live since 2026-07-28 as com.roassensor:roas).
@@ -106,7 +125,65 @@ mavenPublishing {
         //     returning users, frozen engagement_ms. See registerLifecycle.
         //   * consumer-rules.pro never kept the App Set ID classes, so R8
         //     renamed them and app_set_id was blank in every minified build.
-        version = "0.1.4",
+        //
+        // 0.1.5: a batch of fixes from a live testing pass (real emulator +
+        // two physical devices — a Nokia and a Vivo V2130 — plus a real
+        // /c/<slug> ad click), all found and fixed together:
+        //   * handleDeepLink forwarded ONLY rsclid, dropping every other
+        //     query param — caught by firing
+        //     `roassample://open?rsclid=X&utm_source=meta&rs_campaign=...`
+        //     and finding utm_source/rs_campaign missing from the resulting
+        //     TouchPoint. It also refused to forward a link using a
+        //     non-rsclid click id (gclid/fbclid/...) at all, even though
+        //     CLICK_ID_PARAMS on the backend already recognizes those. Now
+        //     forwards the full raw query string whenever one is present,
+        //     the same as a Play install referrer.
+        //   * An OEM data-retention layer (or Android's own Auto Backup) can
+        //     preserve this SDK's own SharedPreferences file across what the
+        //     OS treats as a genuine reinstall — confirmed live on the Vivo:
+        //     the same vid and installReported=true kept coming back across
+        //     repeated on-device uninstall/reinstall cycles. Roas.initialize()
+        //     now compares PackageManager.firstInstallTime (which lives
+        //     outside the app's private data dir, so no data-clone/restore
+        //     can fake it) against the last value it saw, and wipes the
+        //     install/vid/session state on a mismatch. See
+        //     Storage.firstInstallTime. Storage.resetForNewInstall also
+        //     clears the beacon queue when this fires — a queued entry's
+        //     JSON body has the OLD vid baked in at enqueue time, and
+        //     delivering it after the reset would attach a stale identity's
+        //     beacon to what is now a different install.
+        //   * An already-installed user who taps an ad link produced a
+        //     completely unattributed app_open — confirmed live: a real
+        //     tracking-link click was logged correctly, then the resulting
+        //     app_open 38 seconds later carried zero campaign data, because
+        //     nothing ever calls MobileDeferredLinkView outside of a fresh
+        //     install. sendSessionStart now fires a best-effort probe to it
+        //     on every session start.
+        //   * That probe's own beacon surfaced a genuine concurrency bug:
+        //     Transport.flush() read the queue, spent real time on network
+        //     I/O, then overwrote the queue with a now-stale "remaining"
+        //     snapshot — silently discarding any beacon enqueued by a second
+        //     send() fired moments later (which is exactly what the
+        //     deferred-link probe does, right after the app_open send).
+        //     Storage.removeDelivered replaces that read-then-overwrite
+        //     pattern with a single atomic read-modify-write, so a beacon
+        //     enqueued mid-flush now survives.
+        //   * Install attribution for non-Play-Store installs. Adjust's
+        //     Android SDK (external comparison, this repo not affiliated)
+        //     still listens for the legacy `INSTALL_REFERRER` broadcast
+        //     several OEM stores (Huawei AppGallery, Xiaomi GetApps, Vivo App
+        //     Store, Samsung Galaxy Store, Amazon Appstore) send for
+        //     compatibility with older marketing SDKs — we only ever asked
+        //     Google's newer Install Referrer API, which answers
+        //     FEATURE_NOT_SUPPORTED for any non-Play install and nothing
+        //     else, indistinguishable from organic. Added
+        //     InstallReferrerBroadcastReceiver + ReferrerFallback (Play's own
+        //     answer always wins when it has one; the broadcast is a
+        //     fallback only for Play's total silence) + a one-shot
+        //     next-launch catch-up for when the broadcast arrives a few
+        //     seconds after the very first install beacon already went out.
+        //     Confirmed live on the Vivo via a real `adb shell am broadcast`.
+        version = "0.1.5",
     )
 
     pom {
