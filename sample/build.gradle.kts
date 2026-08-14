@@ -57,5 +57,14 @@ android {
 
 dependencies {
     implementation(project(":roas")) // the SDK under test
+    // Local-only, pre-publish testing of the two optional OEM referrer
+    // modules — a real host app would instead add
+    // implementation("com.roassensor:roas-xiaomi-referrer:...") once these
+    // are published. project() deps work here because this module lives in
+    // the same Gradle build; :roas core still only ever reaches them
+    // reflectively, so this is purely how the sample app gets them onto its
+    // OWN classpath for a real device to exercise.
+    implementation(project(":roas-xiaomi-referrer"))
+    implementation(project(":roas-samsung-referrer"))
     implementation("com.revenuecat.purchases:purchases:10.15.1")
 }
