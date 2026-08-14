@@ -395,54 +395,101 @@ object Roas {
             // Google's policy. Blocking, hence out here beside the GAID read.
             val appSetId = AppSetId.fetch(appContext)
             InstallReferrerReader.fetch(appContext) { result ->
-                val body = baseBody()
-                    .put("os", "Android")
-                    .put("app_version", appVersion())
-                    // The install IS session 1's opening touch, so it carries the
-                    // session's pv_id: the closing beacon then folds foreground
-                    // time into this row instead of writing an app_open next to it.
-                    .put("pv_id", storage.sessionPvId)
-                    .put("session_number", storage.sessionNumber)
-                // Model, OS/API level, Play Store version, form factor, installer.
-                // Sets device_type too — which is why it is no longer the constant
-                // "mobile" that made every tablet look like a phone.
-                DeviceInfo.describe(appContext, body)
-                gaid?.let { body.put("device_id", it) } // raw; the server hashes it
-                appSetId?.let { body.put("app_set_id", it) } // raw; the server SALT-hashes it
-                // referrer_status sent even on failure — this is what makes "why
-                // did this device never get a referrer" answerable from the
-                // backend instead of needing that device's own Logcat. Falls
-                // back to the legacy INSTALL_REFERRER broadcast (non-Play
-                // stores) when Play itself came back with nothing — see
-                // ReferrerFallback for why Play's own answer always wins when
-                // it has one.
-                val decision = ReferrerFallback.decide(result, storage.broadcastReferrer)
-                body.put("referrer_status", decision.status)
-                if (result.referrer != null) {
-                    body.putReferrer(result.referrer)
-                } else if (decision.broadcastReferrer != null) {
-                    body.put("install_referrer", decision.broadcastReferrer)
-                    storage.broadcastReferrer = "" // consumed
-                }
-                customerUserId?.let { body.put("external_id", it) }
-                transport.send("/api/tracking/mobile/first-open", body)
+                // Google's own answer is authoritative when it has one — even
+                // organic/not-set is Play's own read, not an opening for a
+                // second guess (see ReferrerFallback). The OEM channel is
+                // only worth trying — and only the ONE matching this exact
+                // device — when Play genuinely gave nothing usable.
+                val needsOem = result.referrer == null ||
+                    result.status == "OK_NOT_SET" || result.status == "OK_EMPTY"
+                val oemSource = if (needsOem) OemDevice.which() else OemDevice.Source.NONE
+                fetchOemReferrer(appContext, oemSource) { oemResult ->
+                    val body = baseBody()
+                        .put("os", "Android")
+                        .put("app_version", appVersion())
+                        // The install IS session 1's opening touch, so it carries the
+                        // session's pv_id: the closing beacon then folds foreground
+                        // time into this row instead of writing an app_open next to it.
+                        .put("pv_id", storage.sessionPvId)
+                        .put("session_number", storage.sessionNumber)
+                    // Model, OS/API level, Play Store version, form factor, installer.
+                    // Sets device_type too — which is why it is no longer the constant
+                    // "mobile" that made every tablet look like a phone.
+                    DeviceInfo.describe(appContext, body)
+                    gaid?.let { body.put("device_id", it) } // raw; the server hashes it
+                    appSetId?.let { body.put("app_set_id", it) } // raw; the server SALT-hashes it
+                    // referrer_status/referrer_source sent even on failure — this is
+                    // what makes "why did this device never get a referrer, and which
+                    // channel actually answered" answerable from the backend instead
+                    // of needing that device's own Logcat. Priority: Play -> the
+                    // matching OEM channel -> the legacy INSTALL_REFERRER broadcast
+                    // (non-Play stores) -> nothing — see ReferrerFallback.
+                    val decision = ReferrerFallback.decide(
+                        result,
+                        oemSource.label(),
+                        oemResult,
+                        storage.broadcastReferrer,
+                    )
+                    body.put("referrer_status", decision.status)
+                    body.put("referrer_source", decision.source)
+                    if (result.referrer != null) {
+                        body.putReferrer(result.referrer)
+                    } else if (decision.oemReferrer != null) {
+                        body.putOemReferrer(decision.oemReferrer)
+                    } else if (decision.broadcastReferrer != null) {
+                        body.put("install_referrer", decision.broadcastReferrer)
+                        storage.broadcastReferrer = "" // consumed
+                    }
+                    customerUserId?.let { body.put("external_id", it) }
+                    transport.send("/api/tracking/mobile/first-open", body)
 
-                // The install is now on record either way — losing an install
-                // count would be worse than losing its referrer — so this stays
-                // true unconditionally. What is NEW is remembering that the
-                // referrer is still owed to us when the failure was transient;
-                // previously that was indistinguishable from a clean read and
-                // the device never tried again for the life of the install.
-                storage.installReported = true
-                storage.referrerPending =
-                    result.referrer == null && InstallReferrerReader.isTransient(result.status)
-                storage.referrerAttempts = 0
-                // Only worth a later look if NEITHER source came through — Play
-                // gave nothing AND the broadcast hasn't arrived yet either.
-                storage.awaitingBroadcastReferrer =
-                    result.referrer == null && decision.broadcastReferrer == null
+                    // The install is now on record either way — losing an install
+                    // count would be worse than losing its referrer — so this stays
+                    // true unconditionally. What is NEW is remembering that the
+                    // referrer is still owed to us when the failure was transient;
+                    // previously that was indistinguishable from a clean read and
+                    // the device never tried again for the life of the install.
+                    storage.installReported = true
+                    storage.referrerPending =
+                        result.referrer == null && InstallReferrerReader.isTransient(result.status)
+                    storage.referrerAttempts = 0
+                    // Only worth a later look if NONE of the three sources came
+                    // through — Play gave nothing, the OEM channel (if tried) gave
+                    // nothing, and the broadcast hasn't arrived yet either.
+                    storage.awaitingBroadcastReferrer =
+                        result.referrer == null &&
+                        decision.oemReferrer == null &&
+                        decision.broadcastReferrer == null
+                }
             }
         }
+    }
+
+    /** Dispatches to the one OEM reader matching [source], or calls back
+     *  immediately with an unattempted result when this device isn't one of
+     *  the four. Kept as its own function so [reportFirstOpen] reads as
+     *  "try Google, then try the matching OEM, then decide" without the
+     *  four-way branch cluttering that flow. */
+    private fun fetchOemReferrer(
+        context: Context,
+        source: OemDevice.Source,
+        callback: (OemReferrer.Result) -> Unit,
+    ) {
+        when (source) {
+            OemDevice.Source.VIVO -> VivoReferrerReader.fetch(context, callback)
+            OemDevice.Source.HUAWEI -> HuaweiReferrerReader.fetch(context, callback)
+            OemDevice.Source.XIAOMI -> XiaomiReferrerBridge.fetch(context, callback)
+            OemDevice.Source.SAMSUNG -> SamsungReferrerBridge.fetch(context, callback)
+            OemDevice.Source.NONE -> callback(OemReferrer.Result(null, "NOT_AVAILABLE"))
+        }
+    }
+
+    private fun OemDevice.Source.label(): String = when (this) {
+        OemDevice.Source.VIVO -> "vivo"
+        OemDevice.Source.HUAWEI -> "huawei"
+        OemDevice.Source.XIAOMI -> "xiaomi"
+        OemDevice.Source.SAMSUNG -> "samsung"
+        OemDevice.Source.NONE -> ""
     }
 
     /**
@@ -475,6 +522,7 @@ object Roas {
                         // recovered referrer and a clean one attribute the same,
                         // but only one of them says the first read failed.
                         .put("referrer_status", "RETRY_${result.status}")
+                        .put("referrer_source", "google") // this retry path is Google-only
                     DeviceInfo.describe(appContext, body)
                     body.putReferrer(referrer)
                     transport.send("/api/tracking/mobile/first-open", body)
@@ -507,6 +555,7 @@ object Roas {
             .put("event_type", "app_open")
             .put("app_version", appVersion())
             .put("referrer_status", "OK_BROADCAST_LATE")
+            .put("referrer_source", "broadcast")
             .put("install_referrer", broadcast)
         DeviceInfo.describe(appContext, body)
         transport.send("/api/tracking/mobile/first-open", body)
@@ -521,6 +570,24 @@ object Roas {
         // the server parses and range-checks them.
         referrer.clickTimestampSeconds?.let { put("referrer_click_timestamp", it) }
         referrer.installBeginTimestampSeconds?.let { put("install_begin_timestamp", it) }
+    }
+
+    /** Same fields, from an OEM channel instead of Google's. The gap is
+     *  computed here rather than per-reader so all four OEM sources share one
+     *  guard: an organic-equivalent read with no real click has nothing to
+     *  time FROM, and subtracting an absent/zero click timestamp from a real
+     *  install timestamp produces the install timestamp itself disguised as
+     *  a multi-decade "gap" — the exact bug [InstallReferrerReader] already
+     *  had to fix for Google's own channel. */
+    private fun JSONObject.putOemReferrer(referrer: OemReferrer.Referrer) {
+        put("install_referrer", referrer.referrer)
+        val click = referrer.clickTimestampSeconds
+        val install = referrer.installTimestampSeconds
+        if (click != null && click > 0 && install != null) {
+            put("click_to_install_seconds", install - click)
+        }
+        click?.let { put("referrer_click_timestamp", it) }
+        install?.let { put("install_begin_timestamp", it) }
     }
 
     /**

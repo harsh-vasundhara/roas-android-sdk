@@ -183,7 +183,55 @@ mavenPublishing {
         //     next-launch catch-up for when the broadcast arrives a few
         //     seconds after the very first install beacon already went out.
         //     Confirmed live on the Vivo via a real `adb shell am broadcast`.
-        version = "0.1.5",
+        //
+        // 0.1.6: multi-device real testing this round (Xiaomi, Nokia/Android
+        // One, Samsung, realme, OnePlus, HUAWEI, stock Pixel, two vivo
+        // models) found Google's own Install Referrer API answering
+        // OK_NOT_SET even seconds after a real, matched ad click, on every
+        // brand tested except one specific vivo unit — Google's channel
+        // alone is not reliable enough on real Android hardware. Adjust's
+        // SDK (external comparison) reads each OEM's own independent
+        // referrer channel in addition to Google's, because Vivo/Huawei/
+        // Xiaomi/Samsung all track installs on their own skinned builds for
+        // their own analytics. Added the same, matched to this SDK's own
+        // conventions:
+        //   * Vivo and Huawei readers live directly in this module — both
+        //     are a plain synchronous ContentProvider read (Vivo:
+        //     ContentResolver.call, Huawei: ContentResolver.query), no
+        //     external dependency, no timeout needed.
+        //   * Xiaomi and Samsung need their own published client libraries
+        //     (com.miui.referrer:homereferrer, Samsung's Galaxy Store
+        //     install-referrer artifact) — async, Builder/Listener APIs
+        //     structurally near-identical to Google's own. Rather than a
+        //     hard dependency here (forcing every consumer to bundle both
+        //     AARs regardless of market) or reflecting the vendor's own
+        //     complex listener interface (fragile — a Proxy over a
+        //     third-party callback breaks silently on any signature change),
+        //     they live in two new optional modules
+        //     (com.roassensor:roas-xiaomi-referrer,
+        //     com.roassensor:roas-samsung-referrer) that reflect into this
+        //     module's own small, stable OemReferrerCallback contract
+        //     instead. A host app adds either only if it targets that
+        //     market; :roas core stays exactly as dependency-light as
+        //     before for everyone else.
+        //   * Tried in OemDevice-matched order, only when Google's own
+        //     answer wasn't usable (OK_NOT_SET/OK_EMPTY/a failure) — Google
+        //     still always wins when it has a real answer, per
+        //     ReferrerFallback's existing principle. The OEM channel
+        //     outranks the legacy INSTALL_REFERRER broadcast fallback too:
+        //     synchronous and same-request, vs. the broadcast's inherent
+        //     race. New referrer_source field records which of the four (or
+        //     "google"/"broadcast") actually answered, alongside the
+        //     existing referrer_status.
+        //   * Also fixed: an organic install (no real click) has Play/every
+        //     OEM report a 0 click timestamp, and the old gap computation
+        //     (install time minus click time) turned that into the raw
+        //     install epoch disguised as a multi-decade "click-to-install"
+        //     value — confirmed live on a vivo V2130 and a Pixel 7a. Now
+        //     null whenever the click timestamp isn't a real positive value,
+        //     matching how the backend already treated the two raw
+        //     timestamps.
+        version = "0.1.6",
     )
 
     pom {

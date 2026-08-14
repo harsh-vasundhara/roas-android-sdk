@@ -1,10 +1,13 @@
 package com.roassensor.sdk
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.android.installreferrer.api.InstallReferrerClient
 import com.android.installreferrer.api.InstallReferrerStateListener
 import com.android.installreferrer.api.ReferrerDetails
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Reads the Google Play **Install Referrer** — the query string ROASSensor
@@ -41,19 +44,61 @@ internal object InstallReferrerReader {
      *  swallowed into an indistinguishable "organic" install. */
     data class Result(val referrer: Referrer?, val status: String)
 
+    /** How long to wait for Play to answer before giving up on this launch.
+     *  Confirmed live: a vivo V2130 running Funtouch OS never once reached
+     *  [onInstallReferrerSetupFinished] across 8 separate launches over more
+     *  than a day — Funtouch's aggressive background-service killing tore
+     *  down the Play Services IPC connection before it could answer, and
+     *  every launch hit [onInstallReferrerServiceDisconnected] (or nothing at
+     *  all) instead. That path used to fire no callback, so
+     *  `reportFirstOpen()` never ran and the install was never counted —
+     *  silently, forever, since the failure recurs identically on every
+     *  future launch too, not just once. */
+    private const val TIMEOUT_MS = 5_000L
+
     /** Fetch asynchronously. `referrer` is null when unavailable; `status`
-     *  always explains why. */
+     *  always explains why. Always calls back exactly once, even when Play
+     *  never does — see [TIMEOUT_MS]. */
     fun fetch(context: Context, callback: (Result) -> Unit) {
         val client = InstallReferrerClient.newBuilder(context.applicationContext).build()
+        // Both the real listener and the timeout below can fire; this is what
+        // keeps the install from being reported twice if Play answers just as
+        // the timeout expires.
+        val answered = AtomicBoolean(false)
+        val handler = Handler(Looper.getMainLooper())
+        val timeoutRunnable = Runnable {
+            if (answered.compareAndSet(false, true)) {
+                try { client.endConnection() } catch (e: Exception) { /* ignore */ }
+                Log.w(TAG, "Install Referrer read timed out after ${TIMEOUT_MS}ms")
+                callback(Result(null, "TIMEOUT"))
+            }
+        }
+        handler.postDelayed(timeoutRunnable, TIMEOUT_MS)
+
         client.startConnection(object : InstallReferrerStateListener {
             override fun onInstallReferrerSetupFinished(responseCode: Int) {
+                if (!answered.compareAndSet(false, true)) return // the timeout already answered
+                handler.removeCallbacks(timeoutRunnable)
                 var referrer: Referrer? = null
                 var status = responseCodeName(responseCode)
                 try {
                     if (responseCode == InstallReferrerClient.InstallReferrerResponse.OK) {
                         val details: ReferrerDetails = client.installReferrer
-                        val gap = details.installBeginTimestampSeconds -
-                            details.referrerClickTimestampSeconds
+                        // An organic install (no real ad click) has nothing to time
+                        // FROM — Play reports referrerClickTimestampSeconds as 0 in
+                        // that case, not null, and subtracting 0 from a real epoch
+                        // install time produced the epoch itself disguised as a
+                        // "gap" (a ~56-year click-to-install time, confirmed live on
+                        // a vivo V2130 and a Pixel 7a). null here matches how the
+                        // backend already treats the two raw timestamps themselves
+                        // (ingest.py's _epoch_seconds guards <= 0 the same way) —
+                        // this was the one place that guard was missing.
+                        val gap = if (details.referrerClickTimestampSeconds > 0) {
+                            details.installBeginTimestampSeconds -
+                                details.referrerClickTimestampSeconds
+                        } else {
+                            null
+                        }
                         val raw = details.installReferrer ?: ""
                         referrer = Referrer(
                             referrer = raw,
@@ -89,9 +134,12 @@ internal object InstallReferrerReader {
             }
 
             override fun onInstallReferrerServiceDisconnected() {
-                // No callback here on purpose: reportFirstOpen() never runs, so
-                // storage.installReported is never set — the next launch retries
-                // this specific transient case naturally.
+                // Used to do nothing here on the theory that a disconnect is
+                // transient and the next launch retries naturally — true for a
+                // one-off hiccup, false for a device whose OS tears down the
+                // connection on every single launch (see TIMEOUT_MS's doc).
+                // The shared timeout above is what actually saves this case
+                // now; nothing device-specific belongs here.
             }
         })
     }

@@ -84,6 +84,18 @@ class InstallReferrerStatusTest {
     }
 
     @Test
+    fun `a fetch that never got a callback still retries`() {
+        // The vivo V2130 case: Funtouch OS tore down the Play Services IPC
+        // connection before either InstallReferrerStateListener method could
+        // fire, on every one of 8 real launches over more than a day — a
+        // failure that recurs identically on every future launch, not a
+        // one-off. InstallReferrerReader.fetch's timeout synthesizes this
+        // status so reportFirstOpen still runs (an install gets counted)
+        // instead of the device silently never reporting one at all.
+        assertTrue(InstallReferrerReader.isTransient("TIMEOUT"))
+    }
+
+    @Test
     fun `permanent failures do not retry`() {
         // A Play Store too old to have the API will not grow one, and our own
         // DEVELOPER_ERROR will not fix itself. Retrying only burns launches.
