@@ -16,13 +16,14 @@ package com.roassensor.sdk
 internal object ReferrerFallback {
 
     /** [status] is what goes in the beacon's `referrer_status` field.
-     *  [source] is what goes in `referrer_source` — "google" for every Play
-     *  branch (even organic/not-set: that is still Play's own answer),
-     *  otherwise whichever channel actually supplied the winning referrer.
-     *  [broadcastReferrer]/[oemReferrer] are non-null only when THAT source is
-     *  the one being used — the Play case still carries its own richer
-     *  [InstallReferrerReader.Referrer] (with click/install timestamps),
-     *  which the caller applies via `putReferrer` instead. */
+     *  [source] is what goes in `referrer_source` — "google" whenever Play's
+     *  own answer is what ends up reported (its authoritative OK/OK_ORGANIC
+     *  branch, or the final fallback below when nothing else recovered
+     *  anything either), otherwise whichever channel actually supplied the
+     *  winning referrer. [broadcastReferrer]/[oemReferrer] are non-null only
+     *  when THAT source is the one being used — the Play case still carries
+     *  its own richer [InstallReferrerReader.Referrer] (with click/install
+     *  timestamps), which the caller applies via `putReferrer` instead. */
     data class Decision(
         val status: String,
         val source: String,
@@ -42,12 +43,13 @@ internal object ReferrerFallback {
         oemResult: OemReferrer.Result?,
         storedBroadcastReferrer: String,
     ): Decision {
-        // Play answered with something — even OK_ORGANIC/OK_EMPTY is Play's own
-        // definitive answer and must not be second-guessed by an OEM channel or
-        // broadcast that could be stale or from a different store's own
-        // (possibly wrong) convention. Only Play's total silence opens the
-        // door to the fallbacks below.
-        if (playResult.referrer != null) {
+        // Play's FINAL word (OK or OK_ORGANIC) must not be second-guessed by an
+        // OEM channel or broadcast that could be stale or from a different
+        // store's own (possibly wrong) convention. OK_NOT_SET/OK_EMPTY do NOT
+        // count as final here even though Play's own Referrer object exists in
+        // both cases — see InstallReferrerReader.isAuthoritative's doc comment for why
+        // that distinction is load-bearing.
+        if (InstallReferrerReader.isAuthoritative(playResult)) {
             return Decision(playResult.status, "google", null, null)
         }
         // The OEM channel outranks the broadcast: it's a synchronous,

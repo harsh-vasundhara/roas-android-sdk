@@ -159,6 +159,23 @@ internal object InstallReferrerReader {
     }
 
     /**
+     * Whether [result] is Play's own FINAL word — worth stopping here rather
+     * than falling through to an OEM channel ([ReferrerFallback]) or the
+     * legacy broadcast. True for `OK` and `OK_ORGANIC`: Play deliberately
+     * told us something, even if that something is "nobody clicked an ad".
+     * False for `OK_NOT_SET`/`OK_EMPTY` — Play's own [Referrer] object exists
+     * (so a naive `referrer != null` check treats these as final too, which
+     * was a real bug here: the OEM fallback was being computed and then
+     * silently discarded on exactly the case it exists for) but carries
+     * nothing useful, because the referrer was dropped somewhere between the
+     * click and the install. That gap is exactly what an OEM channel or the
+     * broadcast exists to recover. False for every real failure too
+     * (`referrer` is null in that case regardless).
+     */
+    fun isAuthoritative(result: Result): Boolean =
+        result.referrer != null && result.status != "OK_NOT_SET" && result.status != "OK_EMPTY"
+
+    /**
      * Whether a failed read is worth trying again on a later launch.
      *
      * SERVICE_UNAVAILABLE and SERVICE_DISCONNECTED are the transient ones —

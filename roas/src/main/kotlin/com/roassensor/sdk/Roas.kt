@@ -395,13 +395,17 @@ object Roas {
             // Google's policy. Blocking, hence out here beside the GAID read.
             val appSetId = AppSetId.fetch(appContext)
             InstallReferrerReader.fetch(appContext) { result ->
-                // Google's own answer is authoritative when it has one — even
-                // organic/not-set is Play's own read, not an opening for a
-                // second guess (see ReferrerFallback). The OEM channel is
+                // Google's own FINAL answer is authoritative when it has one
+                // (see InstallReferrerReader.isAuthoritative — OK/OK_ORGANIC only, NOT
+                // OK_NOT_SET/OK_EMPTY, which carry a non-null Referrer object
+                // despite having nothing useful in it). The OEM channel is
                 // only worth trying — and only the ONE matching this exact
-                // device — when Play genuinely gave nothing usable.
-                val needsOem = result.referrer == null ||
-                    result.status == "OK_NOT_SET" || result.status == "OK_EMPTY"
+                // device — when Play genuinely gave nothing usable. Shares
+                // isAuthoritative with ReferrerFallback.decide() rather than
+                // re-deriving "was Play's answer good enough" a second way —
+                // that duplication is exactly what let this fallback compute
+                // an OEM result and then have it silently discarded below.
+                val needsOem = !InstallReferrerReader.isAuthoritative(result)
                 val oemSource = if (needsOem) OemDevice.which() else OemDevice.Source.NONE
                 fetchOemReferrer(appContext, oemSource) { oemResult ->
                     val body = baseBody()
@@ -432,13 +436,24 @@ object Roas {
                     )
                     body.put("referrer_status", decision.status)
                     body.put("referrer_source", decision.source)
-                    if (result.referrer != null) {
-                        body.putReferrer(result.referrer)
-                    } else if (decision.oemReferrer != null) {
-                        body.putOemReferrer(decision.oemReferrer)
-                    } else if (decision.broadcastReferrer != null) {
-                        body.put("install_referrer", decision.broadcastReferrer)
-                        storage.broadcastReferrer = "" // consumed
+                    // Keyed strictly off decision.source — NOT off `result.referrer != null`
+                    // directly, which was a real bug: Play's own Referrer object is
+                    // non-null for OK_NOT_SET/OK_EMPTY too (it just wraps a useless
+                    // placeholder), so that check took Play's placeholder text even
+                    // when `decision` had already correctly resolved to the OEM or
+                    // broadcast source — referrer_source would say "xiaomi" while
+                    // install_referrer silently still carried Play's "(not set)".
+                    // `decision.source == "google"` covers both of Play's real outcomes
+                    // (authoritative, or the final exhausted fallback with nothing
+                    // recovered) — `result.referrer` is correctly null in that second
+                    // case, and `?.let` just sends no referrer field at all.
+                    when (decision.source) {
+                        "google" -> result.referrer?.let { body.putReferrer(it) }
+                        "broadcast" -> {
+                            decision.broadcastReferrer?.let { body.put("install_referrer", it) }
+                            storage.broadcastReferrer = "" // consumed
+                        }
+                        else -> decision.oemReferrer?.let { body.putOemReferrer(it) } // vivo/huawei/xiaomi/samsung
                     }
                     customerUserId?.let { body.put("external_id", it) }
                     transport.send("/api/tracking/mobile/first-open", body)
@@ -454,10 +469,14 @@ object Roas {
                         result.referrer == null && InstallReferrerReader.isTransient(result.status)
                     storage.referrerAttempts = 0
                     // Only worth a later look if NONE of the three sources came
-                    // through — Play gave nothing, the OEM channel (if tried) gave
-                    // nothing, and the broadcast hasn't arrived yet either.
+                    // through — Play gave nothing USEFUL (needsOem, not the raw
+                    // `result.referrer == null`: that was a third instance of the
+                    // same bug, since OK_NOT_SET/OK_EMPTY have a non-null Referrer
+                    // object too and would have wrongly skipped this check), the
+                    // OEM channel (if tried) gave nothing, and the broadcast hasn't
+                    // arrived yet either.
                     storage.awaitingBroadcastReferrer =
-                        result.referrer == null &&
+                        needsOem &&
                         decision.oemReferrer == null &&
                         decision.broadcastReferrer == null
                 }

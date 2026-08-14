@@ -113,4 +113,57 @@ class InstallReferrerStatusTest {
             assertFalse(status, InstallReferrerReader.isTransient(status))
         }
     }
+
+    // ── isAuthoritative: which of Play's own answers may skip the OEM/broadcast
+    // fallback entirely, vs. which still need it despite carrying a non-null
+    // Referrer object ─────────────────────────────────────────────────────────
+
+    private fun result(referrer: InstallReferrerReader.Referrer?, status: String) =
+        InstallReferrerReader.Result(referrer, status)
+
+    private fun realReferrer(raw: String) =
+        InstallReferrerReader.Referrer(
+            referrer = raw,
+            clickToInstallSeconds = null,
+            clickTimestampSeconds = null,
+            installBeginTimestampSeconds = null,
+        )
+
+    @Test
+    fun `a real OK read is authoritative — no fallback needed`() {
+        assertTrue(InstallReferrerReader.isAuthoritative(result(realReferrer("rsclid=AbC123"), "OK")))
+    }
+
+    @Test
+    fun `an organic read is authoritative too — nobody clicked an ad is itself a real answer`() {
+        assertTrue(
+            InstallReferrerReader.isAuthoritative(
+                result(realReferrer("utm_source=google-play&utm_medium=organic"), "OK_ORGANIC"),
+            ),
+        )
+    }
+
+    @Test
+    fun `OK_NOT_SET is NOT authoritative, even though Play's own Referrer object is non-null`() {
+        // The regression this function exists to prevent: a naive
+        // `referrer != null` check treats this as final too (Play DID answer,
+        // technically), silently discarding a correctly-computed OEM/broadcast
+        // fallback on exactly the case it exists for.
+        assertFalse(
+            InstallReferrerReader.isAuthoritative(
+                result(realReferrer("utm_source=(not set)&utm_medium=(not set)"), "OK_NOT_SET"),
+            ),
+        )
+    }
+
+    @Test
+    fun `OK_EMPTY is also NOT authoritative, same as OK_NOT_SET`() {
+        assertFalse(InstallReferrerReader.isAuthoritative(result(realReferrer(""), "OK_EMPTY")))
+    }
+
+    @Test
+    fun `a genuine failure with no Referrer object at all is NOT authoritative`() {
+        assertFalse(InstallReferrerReader.isAuthoritative(result(null, "FEATURE_NOT_SUPPORTED")))
+        assertFalse(InstallReferrerReader.isAuthoritative(result(null, "TIMEOUT")))
+    }
 }
