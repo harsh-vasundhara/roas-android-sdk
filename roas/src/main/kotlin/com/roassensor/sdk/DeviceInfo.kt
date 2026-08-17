@@ -142,7 +142,7 @@ internal object DeviceInfo {
         // Emulator / root signals — the raw list, never a verdict. Omitted
         // entirely on an ordinary device, which is nearly all of them, so this
         // adds nothing to the usual beacon. See DeviceIntegrity for the ceiling.
-        DeviceIntegrity.signals()
+        DeviceIntegrity.signals(context)
             .takeIf { it.isNotEmpty() }
             ?.let { body.put("integrity_signals", org.json.JSONArray(it)) }
         body.put("installer_package", installerPackage(context))

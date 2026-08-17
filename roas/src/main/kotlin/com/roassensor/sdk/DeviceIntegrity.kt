@@ -1,5 +1,8 @@
 package com.roassensor.sdk
 
+import android.app.ActivityManager
+import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import java.io.File
 
@@ -72,7 +75,7 @@ internal object DeviceIntegrity {
      * device that looks ordinary — which is the overwhelming majority, so the
      * field is usually absent from the beacon entirely.
      */
-    fun signals(): List<String> {
+    fun signals(context: Context? = null): List<String> {
         val found = mutableListOf<String>()
 
         // ── Emulator ────────────────────────────────────────────────────────
@@ -124,7 +127,55 @@ internal object DeviceIntegrity {
         if (safe { Build.TAGS }.contains("test-keys")) found.add("test_keys")
         if (isSystemWritable()) found.add("system_writable")
 
+        // ── Environment ─────────────────────────────────────────────────────
+        // Neither emulator nor root evidence — a THIRD category the server
+        // keeps out of both verdicts. These answer "is this a consumer's
+        // phone at all, or a development/QA/automation environment?", which
+        // is most of what the emulator checks above were really being used
+        // for in practice (see this class's own note that the bulk of real
+        // emulator installs are the customer's own QA). Stating it directly
+        // beats inferring it from Build strings.
+        if (context != null) {
+            if (isTestHarness()) found.add("test_harness")
+            if (isDebuggable(context)) found.add("debuggable")
+            // Evidence the device is REAL, not fake. The x86-ABI check was
+            // dropped above precisely because Chromebooks and Windows
+            // Subsystem for Android run genuine users' installs while looking
+            // emulator-ish. This says so positively, so the server can stop
+            // treating those handsets as suspicious rather than merely
+            // declining to accuse them.
+            if (hasFeature(context, "org.chromium.arc")) found.add("chromeos")
+        }
+
         return found
+    }
+
+    /** Google's own "this device is running an automated test" flag (API 29+):
+     *  the cleanest possible separator of CI / Firebase Test Lab installs from
+     *  real users — no heuristics, the platform simply tells us. */
+    private fun isTestHarness(): Boolean = try {
+        // Static on ActivityManager, not an instance method, and API 29+.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            false
+        } else {
+            ActivityManager.isRunningInUserTestHarness()
+        }
+    } catch (t: Throwable) {
+        false
+    }
+
+    /** A debuggable build is the customer's own dev/QA install, never a user's
+     *  — Play refuses debuggable uploads. */
+    private fun isDebuggable(context: Context): Boolean = try {
+        (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    } catch (t: Throwable) {
+        false
+    }
+
+    private fun hasFeature(context: Context, feature: String): Boolean = try {
+        context.packageManager.hasSystemFeature(feature)
+    } catch (t: Throwable) {
+        false
     }
 
     /** `/system` mounted read-write is not something a stock device does. */
