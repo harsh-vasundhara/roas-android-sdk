@@ -408,6 +408,24 @@ object Roas {
                 val needsOem = !InstallReferrerReader.isAuthoritative(result)
                 val oemSource = if (needsOem) OemDevice.which() else OemDevice.Source.NONE
                 fetchOemReferrer(appContext, oemSource) { oemResult ->
+                    // Which channel answered what, on THIS device, at DEBUG.
+                    // Referrer resolution is the single hardest thing in this
+                    // SDK to diagnose after the fact — every failure mode
+                    // (Play placeholder, absent OEM store, an authority we
+                    // don't know, a provider hidden by package visibility)
+                    // converges on the same silent "no referrer" outcome, and
+                    // two real bugs hid behind exactly that before anyone
+                    // thought to force the path and watch it. Nothing secret
+                    // here: the referrer is our own campaign string, and it
+                    // is already sent in the beacon.
+                    if (logLevel >= RoasLogLevel.DEBUG) {
+                        android.util.Log.d(
+                            "RoasReferrer",
+                            "play=${result.status} authoritative=${InstallReferrerReader.isAuthoritative(result)}" +
+                                " oem=$oemSource/${oemResult.status}" +
+                                " oemGotReferrer=${oemResult.referrer != null}",
+                        )
+                    }
                     val body = baseBody()
                         .put("os", "Android")
                         .put("app_version", appVersion())

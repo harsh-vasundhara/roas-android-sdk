@@ -19,6 +19,7 @@ import com.revenuecat.purchases.interfaces.ReceiveOfferingsCallback
 import com.revenuecat.purchases.models.StoreTransaction
 import com.roassensor.sdk.Roas
 import com.roassensor.sdk.RoasEvent
+import com.roassensor.sdk.RoasLogLevel
 
 /**
  * A bare test app for the ROASSensor Android SDK. No XML layout, no extra deps —
@@ -51,6 +52,14 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Verbose on purpose in this sample: DEBUG is what surfaces the
+        // referrer-resolution line (`RoasReferrer` tag) showing which channel
+        // — Play, or a matching OEM store — actually answered on THIS device,
+        // which is the thing worth watching when testing attribution on real
+        // hardware. MUST be set before initialize(), since the install beacon
+        // is reported from inside it.
+        Roas.setLogLevel(RoasLogLevel.DEBUG)
 
         // This reports the install (first launch) and flushes any queued beacons.
         Roas.initialize(this, publicKey = publicKey, baseUrl = baseUrl)
