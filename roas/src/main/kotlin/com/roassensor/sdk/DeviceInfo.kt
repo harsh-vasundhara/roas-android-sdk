@@ -1,10 +1,15 @@
 package com.roassensor.sdk
 
+import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Build
+import android.telephony.TelephonyManager
 import org.json.JSONObject
 import java.util.Locale
 import java.util.TimeZone
@@ -111,6 +116,96 @@ internal object DeviceInfo {
         ""
     }
 
+    /** Logical size in dp — `WxH`. Unlike raw pixels this is comparable across
+     *  densities, and it is what the tablet/phone split is actually made of. */
+    private fun viewport(context: Context): String = try {
+        val configuration = context.resources.configuration
+        val width = configuration.screenWidthDp
+        val height = configuration.screenHeightDp
+        if (width > 0 && height > 0) "${width}x$height" else ""
+    } catch (t: Throwable) {
+        ""
+    }
+
+    private fun density(context: Context): Int? = try {
+        context.resources.displayMetrics.densityDpi.takeIf { it > 0 }
+    } catch (t: Throwable) {
+        null
+    }
+
+    /** `Pair(simCountryIso, mccMnc)`. Both read-only, neither needs
+     *  READ_PHONE_STATE — deliberately nothing here touches IMEI, the phone
+     *  number, or anything else Play restricts. Blank on a device with no SIM,
+     *  which is a normal answer (tablet, Wi-Fi-only), not a failure. */
+    private fun sim(context: Context): Pair<String, String> = try {
+        val manager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        if (manager == null) {
+            Pair("", "")
+        } else {
+            Pair(
+                (manager.simCountryIso ?: "").lowercase().take(8),
+                // MCC+MNC as Android reports it, e.g. "40410". Identifies the
+                // carrier without identifying the subscriber.
+                (manager.simOperator ?: "").take(16),
+            )
+        }
+    } catch (t: Throwable) {
+        Pair("", "")
+    }
+
+    /** `Pair(totalRamMb, isLowRamDevice)`. */
+    private fun memory(context: Context): Pair<Long?, Boolean?> = try {
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        if (manager == null) {
+            Pair(null, null)
+        } else {
+            val info = ActivityManager.MemoryInfo()
+            manager.getMemoryInfo(info)
+            Pair(
+                (info.totalMem / (1024L * 1024L)).takeIf { it > 0 },
+                manager.isLowRamDevice,
+            )
+        }
+    } catch (t: Throwable) {
+        Pair(null, null)
+    }
+
+    /** `Pair(levelPercent, isCharging)` from the sticky battery broadcast — a
+     *  null receiver registration reads the last value without subscribing, so
+     *  this costs no permission and no lifecycle. */
+    private fun battery(context: Context): Pair<Int?, Boolean?> = try {
+        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        if (intent == null) {
+            Pair(null, null)
+        } else {
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+            val percent = if (level >= 0 && scale > 0) level * 100 / scale else null
+            val charging = when (status) {
+                BatteryManager.BATTERY_STATUS_CHARGING,
+                BatteryManager.BATTERY_STATUS_FULL,
+                -> true
+                -1 -> null // the broadcast did not say
+                else -> false
+            }
+            Pair(percent, charging)
+        }
+    } catch (t: Throwable) {
+        Pair(null, null)
+    }
+
+    /** e.g. "2024-08-01". API 23+; blank below that. */
+    private fun securityPatch(): String = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Build.VERSION.SECURITY_PATCH ?: ""
+        } else {
+            ""
+        }
+    } catch (t: Throwable) {
+        ""
+    }
+
     private fun language(): String = try {
         Locale.getDefault().toLanguageTag()
     } catch (t: Throwable) {
@@ -172,6 +267,49 @@ internal object DeviceInfo {
             transport.takeIf { it.isNotEmpty() }?.let { body.put("network_type", it) }
             vpn?.let { body.put("is_vpn", it) }
         }
+        // Logical (dp) size and density. `screen` above is raw pixels, which
+        // says nothing about physical size on its own — 1080px is a phone or a
+        // tablet depending entirely on density. This is also what `device_type`
+        // is derived from, so sending the inputs lets that 600dp threshold be
+        // retuned server-side instead of being frozen in whatever build a
+        // handset happens to be running.
+        viewport(context).takeIf { it.isNotEmpty() }?.let { body.put("viewport", it) }
+        density(context)?.let { body.put("screen_density", it) }
+        // Country from the SIM rather than the IP — the one geo signal that
+        // SURVIVES A VPN, which is exactly when IP geo is wrong and the
+        // deferred same-IP match is least trustworthy. Needs no permission
+        // (unlike IMEI/phone number, which are restricted and which this
+        // deliberately does not touch). Blank on tablets/eSIM-less devices.
+        sim(context).let { (country, operator) ->
+            country.takeIf { it.isNotEmpty() }?.let { body.put("sim_country", it) }
+            operator.takeIf { it.isNotEmpty() }?.let { body.put("mcc_mnc", it) }
+        }
+        // Memory class: segments budget from flagship, which is genuinely
+        // predictive of conversion and LTV, and correlates with the referrer
+        // failures this whole file exists to explain. `is_low_ram` is the OS's
+        // own flag, not a threshold we invented.
+        memory(context).let { (totalMb, lowRam) ->
+            totalMb?.let { body.put("total_ram_mb", it) }
+            lowRam?.let { body.put("is_low_ram", it) }
+        }
+        // Battery state. A device farm and an emulator both tend to report a
+        // fixed level and permanently-plugged AC, where a real handset drifts
+        // — a cheap, free signal that needs no permission and no heuristic
+        // baked into the app.
+        battery(context).let { (level, charging) ->
+            level?.let { body.put("battery_level", it) }
+            charging?.let { body.put("battery_charging", it) }
+        }
+        // The RAW build fingerprint and security patch level, not just the
+        // boolean signals DeviceIntegrity derives from them. Same reasoning as
+        // `integrity_signals` itself: keeping the evidence rather than only the
+        // verdict is what lets an emulator rule be retuned on a deploy AND
+        // applied retroactively to installs already recorded. A new emulator
+        // that evades today's checks is identifiable in old rows only if the
+        // string that would have caught it was stored.
+        (Build.FINGERPRINT ?: "").takeIf { it.isNotEmpty() }
+            ?.let { body.put("build_fingerprint", it) }
+        securityPatch().takeIf { it.isNotEmpty() }?.let { body.put("security_patch", it) }
         return body
     }
 

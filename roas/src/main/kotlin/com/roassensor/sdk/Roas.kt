@@ -680,6 +680,14 @@ object Roas {
             // campaign that earned them — on exactly the devices least able
             // to report reliably in the first place.
             .put("ts", nowIso())
+            // How far this device's clock sits from the server's, as already
+            // learned from the HTTP Date header. It was computed for signing
+            // and then discarded; reporting it is free and answers two
+            // questions nothing else can — a device hours out of sync is a
+            // click-injection risk (Play's CLIENT-side referrer timestamps are
+            // read off this very clock) and it is the explanation for any `ts`
+            // the server had to reject.
+            .put("clock_offset_seconds", storage.clockOffsetSeconds)
 
     /**
      * Now, in UTC ISO-8601, corrected by the server-clock offset [Transport]
