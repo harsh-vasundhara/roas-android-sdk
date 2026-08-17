@@ -17,21 +17,31 @@ import android.os.Build
  * already uses, for the same reason: `Build.MANUFACTURER`/`Build.BRAND`
  * aren't fakeable in a plain JUnit test without it.
  *
- * **Matching a manufacturer here does NOT mean that OEM's store is present**,
- * and the difference is not academic. Confirmed live on BOTH vivo handsets
- * available for testing — a V2142 (82 vivo system packages) and a V2130 (86)
- * — each reporting `ro.product.manufacturer=vivo` yet carrying **no
- * `com.vivo.appstore` at all**, not even disabled or uninstalled-for-user
- * (`pm list packages -u`). [VivoReferrerReader] correctly answered
- * `NOT_AVAILABLE` on both (7ms on the V2130 — a fast, clean fail, nothing to
- * bind to) and the beacon fell through to Google's own answer as designed.
+ * **Matching a manufacturer here does NOT mean that OEM's store is present**
+ * — but proving a store ABSENT is much harder than it looks, and getting it
+ * wrong is expensive. Two vivo handsets (V2130, V2142) were briefly written
+ * off here as "no Vivo store installed", on two pieces of evidence that were
+ * both real and both misleading: no `com.vivo.appstore` package existed, and
+ * [VivoReferrerReader] answered `NOT_AVAILABLE`. Both handsets in fact ship
+ * the store — as **`com.vivo.apprecommend`** — and its referrer provider
+ * answers fine. Two separate bugs stacked up to hide it:
+ *   1. the reader hardcoded a single authority derived from the OTHER
+ *      package name (see [VivoReferrerReader.AUTHORITIES]); and
+ *   2. this SDK's manifest never declared the provider in `<queries>`, so on
+ *      API 30+ package visibility hid it even once the name was right —
+ *      the giveaway being that `adb shell content call` (shell UID, broad
+ *      visibility) answered while the same call from inside the app did not.
  *
- * Both were Indian-market units (`ro.product.name` suffix `i`: `2130i`,
- * `2127i`), which is a plausible but UNPROVEN explanation — two handsets is
- * not a survey, so treat "Vivo App Store is often absent" as the finding and
- * "absent in market X specifically" as a hypothesis. The practical
- * consequence either way: on a device with no OEM store, this channel cannot
- * recover anything, no matter how well the reader works.
+ * The lesson worth keeping: a reader reporting `NOT_AVAILABLE` is evidence
+ * about OUR REACH, not proof about the device. Confirm a store is genuinely
+ * absent with `cmd package resolve-activity -a android.intent.action.VIEW -d
+ * 'market://details?id=…'` (which names whichever package actually IS the
+ * store) and `dumpsys package providers`, not with a package-name guess.
+ *
+ * Matching therefore stays a *routing* decision ("which ONE reader is worth
+ * asking"), never a promise the reader will find anything — a device can
+ * legitimately ship without an OEM store — but do not read a negative from
+ * these readers as that having happened.
  *
  * So this is a *routing* decision ("which ONE reader is even worth asking"),
  * never a promise that the reader will find anything. Each reader reports its

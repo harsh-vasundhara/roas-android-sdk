@@ -248,12 +248,32 @@ mavenPublishing {
         //       answered OK with an empty referrer (correct: the test app was
         //       sideloaded, not installed from Galaxy Store) in 113ms, one
         //       clean callback, nowhere near the 5s timeout.
-        //     * Vivo (V2142 AND V2130, both tested) — reader ran and answered
-        //       NOT_AVAILABLE on BOTH, in 7ms on the V2130 (fast clean fail),
-        //       because NEITHER handset carries com.vivo.appstore at all.
-        //       See OemDevice's doc: matching a manufacturer never promises
-        //       its store is installed, and on a device without the store
-        //       this channel cannot recover anything however well it works.
+        //     * Vivo (V2142 AND V2130) — this is where forcing the path paid
+        //       for itself. Both initially answered NOT_AVAILABLE and were
+        //       briefly written off as "no Vivo store installed". Both in
+        //       fact ship the store, and TWO stacked bugs hid it — either
+        //       one alone would have made the Vivo AND Huawei readers
+        //       dead code in every real app:
+        //         - the store is packaged as com.vivo.apprecommend on these
+        //           builds, not com.vivo.appstore, so its referrer provider
+        //           lives at com.vivo.apprecommend.provider.referrer. A
+        //           single hardcoded authority missed it entirely;
+        //           VivoReferrerReader now tries a list.
+        //         - this SDK's manifest never declared those providers in
+        //           <queries>, so API 30+ package visibility hid them even
+        //           with the right name. Diagnosed by `adb shell content
+        //           call` (shell UID) answering while the identical call
+        //           from inside the app did not. Xiaomi/Samsung were immune
+        //           only because their vendor AARs declare their own
+        //           visibility, which is why those two passed while these
+        //           two silently did not.
+        //       After both fixes the V2130 reports OK_EMPTY (store present,
+        //       no referrer for a SIDELOADED app — correct) instead of
+        //       NOT_AVAILABLE. That distinction is now enforced in both
+        //       ContentProvider readers: NOT_AVAILABLE means "no store on
+        //       this device" and nothing weaker, mirroring how the Google
+        //       path already separates FEATURE_NOT_SUPPORTED from
+        //       OK_NOT_SET.
         //   NOT verified on hardware: Huawei (no device available), and no
         //   OEM channel has yet been observed WINNING an attribution in
         //   production — that needs a real store-installed app with real ad

@@ -3,6 +3,7 @@ package com.roassensor.sdk
 import android.app.Application
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
@@ -14,6 +15,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -55,9 +57,59 @@ class VivoReferrerReaderTest {
         FakeVivoProvider.bundleToReturn = null
     }
 
-    private fun registerProvider() {
-        Robolectric.buildContentProvider(FakeVivoProvider::class.java)
-            .create("com.vivo.appstore.provider.referrer")
+    /** Registers the fake with BOTH the ContentResolver (so `call` works) and
+     *  the PackageManager (so `resolveContentProvider` finds it). The reader
+     *  deliberately resolves first, to tell "no store on this device" from
+     *  "store present, nothing for this install" — so a test that only did
+     *  the former would model a device that cannot exist. */
+    private fun registerProvider(authority: String = "com.vivo.appstore.provider.referrer") {
+        Robolectric.buildContentProvider(FakeVivoProvider::class.java).create(authority)
+        shadowOf(app.packageManager).addOrUpdateProvider(
+            ProviderInfo().apply {
+                this.authority = authority
+                packageName = "com.vivo.fake.store"
+                name = FakeVivoProvider::class.java.name
+            }
+        )
+    }
+
+    @Test
+    fun `finds the provider under the apprecommend authority too, not just appstore`() {
+        // The regression this exists for: two real Indian-market handsets
+        // (V2130, V2142) ship the Vivo store as `com.vivo.apprecommend`, so
+        // its referrer provider answers at
+        // `com.vivo.apprecommend.provider.referrer`. With only the
+        // `com.vivo.appstore.*` authority hardcoded, both were silently
+        // reported NOT_AVAILABLE while real referrer data was reachable.
+        FakeVivoProvider.bundleToReturn = Bundle().apply {
+            putString("install_referrer", "rsclid=fromApprecommend&rs_campaign=spring")
+            putLong("referrer_click_timestamp_seconds", 1_000L)
+            putLong("download_begin_timestamp_seconds", 1_005L)
+        }
+        registerProvider("com.vivo.apprecommend.provider.referrer")
+
+        var captured: OemReferrer.Result? = null
+        VivoReferrerReader.fetch(app) { captured = it }
+
+        assertEquals("OK", captured?.status)
+        assertEquals("rsclid=fromApprecommend&rs_campaign=spring", captured?.referrer?.referrer)
+    }
+
+    @Test
+    fun `a provider that answers with nothing is OK_EMPTY, never NOT_AVAILABLE`() {
+        // The distinction that matters for diagnosis: "the store is here and
+        // has no referrer for this install" is a different fact from "there
+        // is no store on this device", and only the second should ever read
+        // NOT_AVAILABLE. Exactly what the real V2130 returns for a
+        // sideloaded app (`Result: Bundle[{}]`).
+        FakeVivoProvider.bundleToReturn = Bundle()
+        registerProvider("com.vivo.apprecommend.provider.referrer")
+
+        var captured: OemReferrer.Result? = null
+        VivoReferrerReader.fetch(app) { captured = it }
+
+        assertEquals("OK_EMPTY", captured?.status)
+        assertNull(captured?.referrer)
     }
 
     @Test
@@ -102,13 +154,20 @@ class VivoReferrerReaderTest {
     }
 
     @Test
-    fun `a null bundle from the provider also reports NOT_AVAILABLE`() {
+    fun `a null bundle from a PRESENT provider is OK_EMPTY, not NOT_AVAILABLE`() {
+        // Exactly what a real V2130 does: the store (com.vivo.apprecommend)
+        // is installed and its provider resolves, but `call` hands back null
+        // for a sideloaded app because the store holds referrer records only
+        // for installs it performed. "Store here, nothing for you" must not
+        // be reported as "no store on this device" — that mislabel is what
+        // originally led to these handsets being written off as storeless.
         FakeVivoProvider.bundleToReturn = null
         registerProvider()
 
         var captured: OemReferrer.Result? = null
         VivoReferrerReader.fetch(app) { captured = it }
 
-        assertEquals("NOT_AVAILABLE", captured?.status)
+        assertEquals("OK_EMPTY", captured?.status)
+        assertNull(captured?.referrer)
     }
 }

@@ -18,7 +18,8 @@ import android.util.Log
 internal object HuaweiReferrerReader {
 
     private const val TAG = "RoasHuaweiReferrer"
-    private val CONTENT_URI: Uri = Uri.parse("content://com.huawei.appmarket.commondata/item/5")
+    private const val AUTHORITY = "com.huawei.appmarket.commondata"
+    private val CONTENT_URI: Uri = Uri.parse("content://$AUTHORITY/item/5")
 
     // Fixed column positions in the returned cursor's single row.
     private const val COLUMN_REFERRER = 0
@@ -29,7 +30,25 @@ internal object HuaweiReferrerReader {
      *  reader's call site in [Roas.reportFirstOpen] uniformly. Always calls
      *  back exactly once. */
     fun fetch(context: Context, callback: (OemReferrer.Result) -> Unit) {
-        val result = try {
+        callback(read(context))
+    }
+
+    private fun read(context: Context): OemReferrer.Result {
+        // Resolve FIRST, so "AppGallery isn't on this device" (NOT_AVAILABLE)
+        // stays distinguishable from "AppGallery is here but has no referrer
+        // for this install" (OK_EMPTY). Collapsing those two made a real vivo
+        // finding unreadable — see VivoReferrerReader.read's comment — and
+        // the same trap applies verbatim here.
+        //
+        // Requires the matching <provider> entry in this SDK's manifest
+        // <queries>: on API 30+ package visibility hides the provider
+        // otherwise, and this returns null even on a Huawei device with
+        // AppGallery installed. See AndroidManifest.xml.
+        if (context.packageManager.resolveContentProvider(AUTHORITY, 0) == null) {
+            Log.d(TAG, "Huawei referrer unavailable: provider not present")
+            return OemReferrer.Result(null, "NOT_AVAILABLE")
+        }
+        return try {
             context.contentResolver.query(
                 CONTENT_URI,
                 null,
@@ -52,14 +71,12 @@ internal object HuaweiReferrerReader {
                         )
                     }
                 }
-            } ?: OemReferrer.Result(null, "NOT_AVAILABLE")
+            // The provider resolved a moment ago, so a null cursor is it
+            // declining to answer for this app, not an absent store.
+            } ?: OemReferrer.Result(null, "OK_EMPTY")
         } catch (e: Exception) {
-            // The overwhelmingly common outcome on any non-Huawei device: the
-            // provider doesn't exist, and querying an absent authority throws
-            // rather than returning null on some Android versions.
-            Log.d(TAG, "Huawei referrer unavailable: ${e.javaClass.simpleName}")
-            OemReferrer.Result(null, "NOT_AVAILABLE")
+            Log.d(TAG, "Huawei referrer query failed: ${e.javaClass.simpleName}")
+            OemReferrer.Result(null, "OK_EMPTY")
         }
-        callback(result)
     }
 }

@@ -24,6 +24,33 @@
              binds to, so its version is what separates "the user opted out of
              the ad id" from "this device's Play Services is stale or absent". -->
         <package android:name="com.google.android.gms" />
+
+        <!-- The OEM-native referrer ContentProviders (VivoReferrerReader,
+             HuaweiReferrerReader). WITHOUT these entries those two readers
+             cannot work at all on any app targeting API 30+, which is every
+             app Play now accepts: package visibility hides the provider, the
+             ContentResolver call throws, and the reader reports a perfectly
+             clean NOT_AVAILABLE — indistinguishable from "this device has no
+             OEM store". Found exactly that way on a real vivo V2130: an
+             `adb shell content call` against the authority answered fine
+             (shell has broad visibility) while the SAME call from inside the
+             app returned nothing.
+
+             The Xiaomi and Samsung paths do NOT need an entry here only
+             because their official vendor AARs declare their own visibility,
+             which manifest-merges into the host app — which is also why those
+             two worked on real hardware while these two silently did not.
+
+             Declared as <provider> authorities rather than <package> names on
+             purpose: it is the provider we actually resolve, the authority is
+             the thing our code names, and it keeps this list checkable
+             one-to-one against the readers' own constants. -->
+        <provider android:authorities="com.vivo.appstore.provider.referrer" />
+        <!-- Same store, different package name on some builds (confirmed on
+             Indian-market V2130/V2142, which ship it as com.vivo.apprecommend)
+             — see VivoReferrerReader.AUTHORITIES. -->
+        <provider android:authorities="com.vivo.apprecommend.provider.referrer" />
+        <provider android:authorities="com.huawei.appmarket.commondata" />
     </queries>
 
     <application>

@@ -3,6 +3,7 @@ package com.roassensor.sdk
 import android.app.Application
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -14,6 +15,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -60,9 +62,19 @@ class HuaweiReferrerReaderTest {
         FakeHuaweiProvider.rowToReturn = null
     }
 
+    /** Registers with BOTH the ContentResolver and the PackageManager — the
+     *  reader resolves first, to tell "no AppGallery on this device" from
+     *  "AppGallery present, nothing for this install". */
     private fun registerProvider() {
-        Robolectric.buildContentProvider(FakeHuaweiProvider::class.java)
-            .create("com.huawei.appmarket.commondata")
+        val authority = "com.huawei.appmarket.commondata"
+        Robolectric.buildContentProvider(FakeHuaweiProvider::class.java).create(authority)
+        shadowOf(app.packageManager).addOrUpdateProvider(
+            ProviderInfo().apply {
+                this.authority = authority
+                packageName = "com.huawei.appmarket"
+                name = FakeHuaweiProvider::class.java.name
+            }
+        )
     }
 
     @Test
