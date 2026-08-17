@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Declared by THIS SAMPLE APP, never by the SDK.
+         That distinction is the entire design of DeviceLocation: a library's
+         manifest merges into the host app's, so a location permission
+         declared in :roas would silently appear in every app depending on the
+         SDK — apps whose developers never asked for it and whose Play listing
+         would suddenly claim it. The SDK declares none and only READS a
+         location the host app already holds, which is what this line
+         simulates so the opt-in path can be exercised on a real device.
+         A real host app should add this only if it already needs location for
+         its own features; adding it to feed analytics is a Play Location
+         Permissions problem, not a feature. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:label="ROAS Sample"

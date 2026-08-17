@@ -310,6 +310,16 @@ internal object DeviceInfo {
         (Build.FINGERPRINT ?: "").takeIf { it.isNotEmpty() }
             ?.let { body.put("build_fingerprint", it) }
         securityPatch().takeIf { it.isNotEmpty() }?.let { body.put("security_patch", it) }
+        // Coordinates ONLY when the host app already holds a location
+        // permission of its own — this SDK declares none and prompts for
+        // none, so on every other app this is simply absent. Rounded to ~1km
+        // on the device. See DeviceLocation, and note this is a bonus on top
+        // of the IP-derived geo the server resolves for all traffic, never a
+        // substitute for it.
+        DeviceLocation.read(context)?.let { (lat, lon) ->
+            body.put("latitude", lat)
+            body.put("longitude", lon)
+        }
         return body
     }
 
