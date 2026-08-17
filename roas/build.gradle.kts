@@ -231,6 +231,31 @@ mavenPublishing {
         //     null whenever the click timestamp isn't a real positive value,
         //     matching how the backend already treated the two raw
         //     timestamps.
+        //
+        //   What was VERIFIED ON REAL HARDWARE before publishing, by
+        //   temporarily forcing the OEM path to run regardless of Google's
+        //   answer (the gating means it otherwise never fires while Google
+        //   is answering normally), then reverting that override:
+        //     * Xiaomi (Redmi 22101316I) — reflective bridge resolved, bound
+        //       to GetApps' real client, returned REAL referrer data. That
+        //       test is also what surfaced GetApps' own placeholder
+        //       convention (`utm_medium=null`, distinct from Google's
+        //       "(not set)"/"organic"), which the BACKEND did not recognize
+        //       and would have leaked into dashboards as a fake channel —
+        //       fixed in ingest.py, not here.
+        //     * Samsung (SM-M326B, Galaxy Store present) — reflective bridge
+        //       resolved, bound to Samsung's real InstallReferrerClient,
+        //       answered OK with an empty referrer (correct: the test app was
+        //       sideloaded, not installed from Galaxy Store) in 113ms, one
+        //       clean callback, nowhere near the 5s timeout.
+        //     * Vivo (V2142) — reader ran and answered NOT_AVAILABLE because
+        //       that handset carries NO com.vivo.appstore at all. See
+        //       OemDevice's doc: matching a manufacturer never promises its
+        //       store is installed.
+        //   NOT verified on hardware: Huawei (no device available), and no
+        //   OEM channel has yet been observed WINNING an attribution in
+        //   production — that needs a real store-installed app with real ad
+        //   clicks, i.e. the field, not a sideloaded sample.
         version = "0.1.6",
     )
 
