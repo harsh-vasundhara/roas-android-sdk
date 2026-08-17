@@ -195,6 +195,31 @@ internal object DeviceInfo {
         Pair(null, null)
     }
 
+    /** `"Qualcomm/SM6225"` on API 31+, else the board name, else blank. */
+    private fun soc(): String = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val maker = (Build.SOC_MANUFACTURER ?: "").trim()
+            val model = (Build.SOC_MODEL ?: "").trim()
+            listOf(maker, model).filter { it.isNotEmpty() }.joinToString("/").take(64)
+        } else {
+            (Build.BOARD ?: "").trim().take(64)
+        }
+    } catch (t: Throwable) {
+        ""
+    }
+
+    private fun cpuCores(): Int? = try {
+        Runtime.getRuntime().availableProcessors().takeIf { it > 0 }
+    } catch (t: Throwable) {
+        null
+    }
+
+    private fun uptimeSeconds(): Long? = try {
+        (android.os.SystemClock.elapsedRealtime() / 1000L).takeIf { it > 0 }
+    } catch (t: Throwable) {
+        null
+    }
+
     /** e.g. "2024-08-01". API 23+; blank below that. */
     private fun securityPatch(): String = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -310,6 +335,24 @@ internal object DeviceInfo {
         (Build.FINGERPRINT ?: "").takeIf { it.isNotEmpty() }
             ?.let { body.put("build_fingerprint", it) }
         securityPatch().takeIf { it.isNotEmpty() }?.let { body.put("security_patch", it) }
+        // Silicon and board identity. `build_fingerprint` above is one string a
+        // spoofer edits wholesale; these are separate fields it must remember
+        // to keep CONSISTENT with it, which is where careless spoofing shows.
+        // They also let an emulator rule be retuned against hardware rather
+        // than against a fingerprint format that changes between OEM releases.
+        soc().takeIf { it.isNotEmpty() }?.let { body.put("soc", it) }
+        // The user's REGION, distinct from `language` above: a Hindi speaker in
+        // the US and one in India share a language tag and belong in different
+        // rows of a geo report. Free, and unlike IP geo it is unaffected by a
+        // VPN — a third independent geo signal alongside sim_country.
+        (Locale.getDefault().country ?: "").takeIf { it.isNotEmpty() }
+            ?.let { body.put("locale_country", it.uppercase().take(8)) }
+        cpuCores()?.let { body.put("cpu_cores", it) }
+        // Seconds since boot. A device reporting an install within moments of
+        // booting, over and over, is the shape of a farm VM being cycled — a
+        // real handset accumulates uptime. Also lets the server sanity-check a
+        // client clock independently of clock_offset_seconds.
+        uptimeSeconds()?.let { body.put("uptime_seconds", it) }
         // Coordinates ONLY when the host app already holds a location
         // permission of its own — this SDK declares none and prompts for
         // none, so on every other app this is simply absent. Rounded to ~1km

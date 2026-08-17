@@ -396,6 +396,11 @@ object Roas {
         val body = baseBody()
             .put("os", "Android")
             .put("event_type", "app_open")
+            // Was absent here, so every deep-link touch landed with
+            // session_number=0 while the value sat right there in Storage —
+            // which silently made those rows look like they belonged to no
+            // session at all in retention.
+            .put("session_number", storage.sessionNumber)
             .put("install_referrer", query) // server lifts click id + utm/rs_* context, same as a Play referrer
         DeviceInfo.describe(appContext, body)
         transport.send("/api/tracking/mobile/first-open", body)
@@ -577,6 +582,7 @@ object Roas {
                         // but only one of them says the first read failed.
                         .put("referrer_status", "RETRY_${result.status}")
                         .put("referrer_source", "google") // this retry path is Google-only
+                        .put("session_number", storage.sessionNumber)
                     DeviceInfo.describe(appContext, body)
                     body.putReferrer(referrer)
                     transport.send("/api/tracking/mobile/first-open", body)
@@ -610,6 +616,7 @@ object Roas {
             .put("app_version", appVersion())
             .put("referrer_status", "OK_BROADCAST_LATE")
             .put("referrer_source", "broadcast")
+            .put("session_number", storage.sessionNumber)
             .put("install_referrer", broadcast)
         DeviceInfo.describe(appContext, body)
         transport.send("/api/tracking/mobile/first-open", body)
@@ -631,6 +638,7 @@ object Roas {
         referrer.installBeginTimestampServerSeconds?.let {
             put("install_begin_server_timestamp", it)
         }
+        referrer.installVersion?.let { put("install_version", it) }
     }
 
     /** Same fields, from an OEM channel instead of Google's. The gap is

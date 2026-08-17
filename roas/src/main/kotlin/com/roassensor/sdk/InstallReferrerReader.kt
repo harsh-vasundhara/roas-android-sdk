@@ -44,6 +44,12 @@ internal object InstallReferrerReader {
         val installBeginTimestampSeconds: Long?,
         val clickTimestampServerSeconds: Long? = null,
         val installBeginTimestampServerSeconds: Long? = null,
+        /** The app version Play recorded at ORIGINAL install. Compared against
+         *  the running `app_version` it separates a genuine first install from
+         *  an update that is only now reporting because the SDK was just
+         *  added — a distinction that otherwise takes guessing at
+         *  first_install_at vs last_update_at. */
+        val installVersion: String? = null,
     )
 
     /** [status] is always populated — "OK" on success, else the Play Install
@@ -135,6 +141,7 @@ internal object InstallReferrerReader {
                                 details.referrerClickTimestampServerSeconds.takeIf { it > 0 },
                             installBeginTimestampServerSeconds =
                                 details.installBeginTimestampServerSeconds.takeIf { it > 0 },
+                            installVersion = details.installVersion?.takeIf { it.isNotEmpty() },
                         )
                         // A successful READ is not a successful ATTRIBUTION. Play
                         // can hand back its own placeholders, and the two mean
