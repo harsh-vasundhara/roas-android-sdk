@@ -18,12 +18,20 @@ import android.os.Build
  * aren't fakeable in a plain JUnit test without it.
  *
  * **Matching a manufacturer here does NOT mean that OEM's store is present**,
- * and the difference is not academic: confirmed live on a real vivo V2142
- * (`ro.product.manufacturer=vivo`, 82 vivo system packages) that carried **no
- * `com.vivo.appstore` at all** — not even disabled or uninstalled-for-user —
- * so [VivoReferrerReader] correctly answered `NOT_AVAILABLE` and the beacon
- * fell through to Google's own answer exactly as designed. A device ships,
- * or a user removes, an OEM store independently of who built the handset.
+ * and the difference is not academic. Confirmed live on BOTH vivo handsets
+ * available for testing — a V2142 (82 vivo system packages) and a V2130 (86)
+ * — each reporting `ro.product.manufacturer=vivo` yet carrying **no
+ * `com.vivo.appstore` at all**, not even disabled or uninstalled-for-user
+ * (`pm list packages -u`). [VivoReferrerReader] correctly answered
+ * `NOT_AVAILABLE` on both (7ms on the V2130 — a fast, clean fail, nothing to
+ * bind to) and the beacon fell through to Google's own answer as designed.
+ *
+ * Both were Indian-market units (`ro.product.name` suffix `i`: `2130i`,
+ * `2127i`), which is a plausible but UNPROVEN explanation — two handsets is
+ * not a survey, so treat "Vivo App Store is often absent" as the finding and
+ * "absent in market X specifically" as a hypothesis. The practical
+ * consequence either way: on a device with no OEM store, this channel cannot
+ * recover anything, no matter how well the reader works.
  *
  * So this is a *routing* decision ("which ONE reader is even worth asking"),
  * never a promise that the reader will find anything. Each reader reports its
