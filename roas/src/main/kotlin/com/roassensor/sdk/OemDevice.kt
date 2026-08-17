@@ -16,6 +16,21 @@ import android.os.Build
  * "pure core, thin Android wrapper" shape [InstallReferrerReader.classify]
  * already uses, for the same reason: `Build.MANUFACTURER`/`Build.BRAND`
  * aren't fakeable in a plain JUnit test without it.
+ *
+ * **Matching a manufacturer here does NOT mean that OEM's store is present**,
+ * and the difference is not academic: confirmed live on a real vivo V2142
+ * (`ro.product.manufacturer=vivo`, 82 vivo system packages) that carried **no
+ * `com.vivo.appstore` at all** — not even disabled or uninstalled-for-user —
+ * so [VivoReferrerReader] correctly answered `NOT_AVAILABLE` and the beacon
+ * fell through to Google's own answer exactly as designed. A device ships,
+ * or a user removes, an OEM store independently of who built the handset.
+ *
+ * So this is a *routing* decision ("which ONE reader is even worth asking"),
+ * never a promise that the reader will find anything. Each reader reports its
+ * own `NOT_AVAILABLE` honestly rather than being pre-gated here on a package
+ * check, because the reader's own read is the authoritative answer to "can
+ * this channel actually help?" — a `<queries>` package probe would just be a
+ * second, staler way to ask the same question.
  */
 internal object OemDevice {
 
