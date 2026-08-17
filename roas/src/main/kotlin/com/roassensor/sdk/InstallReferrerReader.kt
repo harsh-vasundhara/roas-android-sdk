@@ -25,11 +25,25 @@ internal object InstallReferrerReader {
      *  different fraud threshold later, and it cannot say WHEN the click happened
      *  — so it can't be lined up against the campaign's own schedule. We had both
      *  values in hand from ReferrerDetails and used to discard them. */
+    /** [clickTimestampServerSeconds]/[installBeginTimestampServerSeconds] are
+     *  Google's OWN record of the same two moments, taken on Play's servers
+     *  rather than read off this handset's clock.
+     *
+     *  That distinction is the whole point: the click-injection check
+     *  (`ingest.py`, a suspiciously tiny click→install gap) runs on the
+     *  client pair above, which a device with a deliberately wrong clock can
+     *  set to anything — so the fraud signal was forgeable by the exact
+     *  party it exists to catch. These two cannot be, because the attacker's
+     *  device never touches them. Sent alongside, never instead of, the
+     *  client pair: Play omits the server values on older Play Store builds,
+     *  and the client ones are still what a genuine install reports. */
     data class Referrer(
         val referrer: String,
         val clickToInstallSeconds: Long?,
         val clickTimestampSeconds: Long?,
         val installBeginTimestampSeconds: Long?,
+        val clickTimestampServerSeconds: Long? = null,
+        val installBeginTimestampServerSeconds: Long? = null,
     )
 
     /** [status] is always populated — "OK" on success, else the Play Install
@@ -110,6 +124,17 @@ internal object InstallReferrerReader {
                             // negatives, so the server can judge; it's the strongest
                             // fraud tell we have.
                             clickToInstallSeconds = gap,
+                            // Google's own server-side record of the same two
+                            // moments — unforgeable by a tampered device clock,
+                            // unlike the pair above. Guarded and defaulted to
+                            // null: these getters exist from Install Referrer
+                            // library 2.0 but Play returns 0 when its own build
+                            // is too old to have recorded them, and a 0 must not
+                            // be mistaken for "the epoch".
+                            clickTimestampServerSeconds =
+                                details.referrerClickTimestampServerSeconds.takeIf { it > 0 },
+                            installBeginTimestampServerSeconds =
+                                details.installBeginTimestampServerSeconds.takeIf { it > 0 },
                         )
                         // A successful READ is not a successful ATTRIBUTION. Play
                         // can hand back its own placeholders, and the two mean

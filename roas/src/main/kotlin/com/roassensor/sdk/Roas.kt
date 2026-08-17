@@ -6,6 +6,10 @@ import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * ROASSensor Android SDK — the public entry point.
@@ -329,7 +333,20 @@ object Roas {
         Hashing.hashEmail(email).takeIf { it.isNotEmpty() }?.let { body.put("email_hash", it) }
         Hashing.hashPhone(phone).takeIf { it.isNotEmpty() }?.let { body.put("phone_hash", it) }
         customerUserId?.let { body.put("external_id", it) }
-        if (body.has("email_hash") || body.has("phone_hash") || body.has("external_id")) {
+        if (!body.has("email_hash") && !body.has("phone_hash") && !body.has("external_id")) return
+        // The ad id belongs on THIS beacon too, not just the install.
+        // `mobile._device_keys` binds it as an IdentityKey alongside the
+        // email/phone being identified, which is what merges "this ad id" and
+        // "this person" into one identity — but it can only do that from a
+        // payload that carries one, and this path never sent it, so the
+        // binding happened once at first-open and never again. That single
+        // read is exactly the one most likely to have come back null (ads
+        // personalization off at install, Play Services not ready yet), and
+        // nothing ever revisited it. Read off the main thread, like every
+        // other GAID read here — the beacon is queued either way, so this
+        // costs the caller nothing.
+        transport.background {
+            DeviceId.advertisingId(appContext)?.let { body.put("device_id", it) }
             transport.send("/api/tracking/mobile/identify", body)
         }
     }
@@ -607,6 +624,13 @@ object Roas {
         // the server parses and range-checks them.
         referrer.clickTimestampSeconds?.let { put("referrer_click_timestamp", it) }
         referrer.installBeginTimestampSeconds?.let { put("install_begin_timestamp", it) }
+        // Google's server-side pair — see InstallReferrerReader.Referrer. The
+        // client values above stay, so a Play build too old to report these
+        // degrades to exactly today's behaviour rather than losing the gap.
+        referrer.clickTimestampServerSeconds?.let { put("referrer_click_server_timestamp", it) }
+        referrer.installBeginTimestampServerSeconds?.let {
+            put("install_begin_server_timestamp", it)
+        }
     }
 
     /** Same fields, from an OEM channel instead of Google's. The gap is
@@ -646,6 +670,41 @@ object Roas {
             .put("vid", storage.visitorId)
             .put("session_id", sessions.current().id)
             .put("sequence", sessions.nextSequence())
+            // WHEN this happened, not when it was delivered. The queue is
+            // persisted precisely so an install that happens offline still
+            // reports — but without this the server falls back to its own
+            // clock at ingest (`ingest._occurred_at`), so an install that
+            // happened offline on Monday and flushed on Wednesday was
+            // RECORDED as a Wednesday install. That silently moves installs
+            // between days, past the end of a lookback window, and out of the
+            // campaign that earned them — on exactly the devices least able
+            // to report reliably in the first place.
+            .put("ts", nowIso())
+
+    /**
+     * Now, in UTC ISO-8601, corrected by the server-clock offset [Transport]
+     * already learns from the `Date` response header.
+     *
+     * The correction matters: a handset with a badly wrong clock (dead
+     * battery, no network time) is the same handset most likely to be
+     * queueing beacons offline, and the server REJECTS a `ts` more than five
+     * minutes in the future or ninety days old, falling back to ingest time.
+     * Correcting it keeps those devices' events on the right day instead of
+     * quietly reverting to the behaviour this replaced.
+     *
+     * A fresh formatter per call: `SimpleDateFormat` is not thread-safe and
+     * beacons are built on both the main and transport threads. Fixed
+     * `Locale.US` + UTC for the same reason [Transport] pins them when
+     * parsing the `Date` header — a device in a non-Gregorian calendar
+     * locale would otherwise format a year the server cannot parse.
+     */
+    private fun nowIso(): String = try {
+        val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+        format.timeZone = TimeZone.getTimeZone("UTC")
+        format.format(Date(System.currentTimeMillis() + storage.clockOffsetSeconds * 1000L))
+    } catch (e: Exception) {
+        "" // blank simply omits it; the server falls back to ingest time
+    }
 
     private fun appVersion(): String = try {
         appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: ""

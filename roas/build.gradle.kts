@@ -278,6 +278,46 @@ mavenPublishing {
         //   OEM channel has yet been observed WINNING an attribution in
         //   production — that needs a real store-installed app with real ad
         //   clicks, i.e. the field, not a sideloaded sample.
+        //
+        //   Parameter/accuracy work landed in the same unpublished 0.1.6
+        //   rather than bumping again — nothing has shipped to Central yet,
+        //   and a version number per working session is how you end up
+        //   explaining a 0.1.8 that never existed anywhere:
+        //     * `ts` on EVERY beacon (baseBody). Nothing Android sent one
+        //       before, so `ingest._occurred_at` always fell back to ingest
+        //       time — meaning the persisted offline queue, whose entire
+        //       purpose is that an install happening offline still reports,
+        //       recorded that install on the day it was FLUSHED. Monday's
+        //       install became Wednesday's, sliding out of its lookback
+        //       window and off the campaign that earned it. Stamped with the
+        //       server-corrected clock (Storage.clockOffsetSeconds), and the
+        //       server still rejects anything >5min future / >90d old.
+        //     * identify() now carries device_id. mobile._device_keys binds
+        //       the ad id to the email/phone being identified, but could
+        //       never do so from this path because it sent none — so that
+        //       binding happened once at first-open and never again, and
+        //       that single read is the one most likely to have returned
+        //       null (ads personalization off, Play Services not ready).
+        //     * Google's SERVER-side referrer timestamps
+        //       (referrerClickTimestampServerSeconds / install equivalent),
+        //       alongside — never replacing — the client pair. The
+        //       click-injection check ran purely on device-clock values,
+        //       i.e. was forgeable by setting the clock; Google's own
+        //       timestamps never touch the attacker's device. Older Play
+        //       builds omit them, which is normal rather than suspicious.
+        //     * PackageManager firstInstallTime/lastUpdateTime (converted to
+        //       SECONDS, since the backend guard rejects millis-shaped
+        //       values) — a true install moment independent of beacon
+        //       arrival, and first != last distinguishes a real first
+        //       install from an update reporting for the first time.
+        //     * network_type + is_vpn from ConnectivityManager, costing no
+        //       new permission (ACCESS_NETWORK_STATE is already held for
+        //       delivery). is_vpn is the load-bearing one: the deferred
+        //       same-IP match is the only route by which a referrer-less
+        //       install still attributes, and a VPN silently invalidates the
+        //       IP it compares — previously with nothing in the row to say
+        //       so. Deliberately tri-state; NULL means "never found out",
+        //       which is not "no VPN".
         version = "0.1.6",
     )
 

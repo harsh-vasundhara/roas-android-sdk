@@ -2,6 +2,8 @@ package com.roassensor.sdk
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import org.json.JSONObject
 import java.util.Locale
@@ -147,6 +149,77 @@ internal object DeviceInfo {
         screen(context).takeIf { it.isNotEmpty() }?.let { body.put("screen", it) }
         language().takeIf { it.isNotEmpty() }?.let { body.put("language", it) }
         timezone().takeIf { it.isNotEmpty() }?.let { body.put("timezone", it) }
+        // The OS's own record of when this app was installed and last updated
+        // — read from PackageManager, outside the app's data dir, so no
+        // backup/restore or data-clone can forge it (the same property
+        // Roas.resetIfDataWasResurrected already relies on). It gives the
+        // server a true install moment independent of when the beacon
+        // arrived, and `first_install_at != last_update_at` is how a genuine
+        // first install is told apart from an update reporting for the first
+        // time after the SDK was added.
+        installTimes(context).let { (first, lastUpdate) ->
+            first?.let { body.put("first_install_timestamp", it) }
+            lastUpdate?.let { body.put("last_update_timestamp", it) }
+        }
+        // How this device is on the network right now. `is_vpn` is the
+        // load-bearing one: the backend's deferred same-IP match is the only
+        // place an install with no referrer can still be attributed, and it
+        // compares the install's IP to the click's — which a VPN silently
+        // invalidates, producing a wrong match or a missed one with no way to
+        // tell after the fact. Costs no new permission: ACCESS_NETWORK_STATE
+        // is already held for delivery.
+        network(context).let { (transport, vpn) ->
+            transport.takeIf { it.isNotEmpty() }?.let { body.put("network_type", it) }
+            vpn?.let { body.put("is_vpn", it) }
+        }
         return body
+    }
+
+    /** `first_install` / `last_update`, epoch **seconds** (PackageManager
+     *  reports millis; the server's `_epoch_seconds` guard deliberately
+     *  rejects millis-shaped values, so convert here rather than sending a
+     *  unit the backend is built to refuse). */
+    private fun installTimes(context: Context): Pair<Long?, Long?> = try {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        Pair(
+            (info.firstInstallTime / 1000L).takeIf { it > 0 },
+            (info.lastUpdateTime / 1000L).takeIf { it > 0 },
+        )
+    } catch (t: Throwable) {
+        Pair(null, null)
+    }
+
+    /** `Pair(transport, isVpn)` — e.g. `("wifi", false)`. Both null/blank when
+     *  the state cannot be read, which is just an absent field. */
+    private fun network(context: Context): Pair<String, Boolean?> {
+        // activeNetwork and NET_CAPABILITY_NOT_VPN are API 23+; this SDK's
+        // minSdk is 21. The catch below would swallow the NoSuchMethodError
+        // anyway, but checking says so on purpose rather than leaving a real
+        // API mismatch to be absorbed by a broad catch.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return Pair("", null)
+        return try {
+            val manager =
+                context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val capabilities = manager?.activeNetwork?.let { manager.getNetworkCapabilities(it) }
+            if (capabilities == null) {
+                Pair("", null)
+            } else {
+                val transport = when {
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                    // A handset on wired ethernet is worth seeing: it is far
+                    // more often an emulator or a device farm than a phone.
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                    else -> "other"
+                }
+                // NOT_VPN is absent exactly when a VPN IS in play.
+                Pair(
+                    transport,
+                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                )
+            }
+        } catch (t: Throwable) {
+            Pair("", null)
+        }
     }
 }
