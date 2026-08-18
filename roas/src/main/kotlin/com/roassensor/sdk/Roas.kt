@@ -324,6 +324,26 @@ object Roas {
     @JvmStatic
     fun visitorId(): String? = if (initialized) storage.visitorId else null
 
+    /**
+     * The value to set as Play Billing's `obfuscatedAccountId`
+     * (`BillingFlowParams.Builder.setObfuscatedAccountId`) so a Real-Time
+     * Developer Notification attributes the sale to this install. Needed only
+     * for the direct-to-Play revenue path; RevenueCat uses [visitorId] instead.
+     *
+     * It returns the visitor id unchanged — Play accepts any string up to 64
+     * characters and ours is 34, so unlike Apple's `appAccountToken` (which
+     * must be a UUID, hence `Roas.appAccountToken()` on iOS) there is nothing to
+     * convert. This exists anyway, because the mistake it prevents is not a
+     * formatting one: it is not knowing that the visitor id has to be threaded
+     * into the purchase at all. Every Android integration that misses this
+     * reports revenue we cannot attribute to any install, and nothing about the
+     * purchase looks wrong. A name that appears in autocomplete beside
+     * `setObfuscatedAccountId` is worth more here than the line of code it
+     * saves, and it keeps the two platforms symmetrical for the Flutter bridge.
+     */
+    @JvmStatic
+    fun obfuscatedAccountId(): String? = visitorId()
+
     /** Bind the user's identity. At least one of the arguments must be non-null. */
     @JvmStatic
     @JvmOverloads
