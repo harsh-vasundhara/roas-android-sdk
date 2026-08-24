@@ -318,7 +318,7 @@ mavenPublishing {
         //       IP it compares — previously with nothing in the row to say
         //       so. Deliberately tri-state; NULL means "never found out",
         //       which is not "no VPN".
-        version = "0.1.6",
+        version = "0.1.7",
     )
 
     pom {

@@ -421,6 +421,14 @@ object Roas {
             // which silently made those rows look like they belonged to no
             // session at all in retention.
             .put("session_number", storage.sessionNumber)
+            // Which channel supplied this referrer. `Roas.swift` has always set
+            // it here; Android did not, so one user action produced
+            // `referrer_source="deeplink"` on iOS and an empty string on
+            // Android. The click id extracted correctly on both, so attribution
+            // was never wrong -- but any report grouping by source split one
+            // behaviour across two buckets, which is exactly the drift a single
+            // dashboard over both platforms cannot afford.
+            .put("referrer_source", "deeplink")
             .put("install_referrer", query) // server lifts click id + utm/rs_* context, same as a Play referrer
         DeviceInfo.describe(appContext, body)
         transport.send("/api/tracking/mobile/first-open", body)
