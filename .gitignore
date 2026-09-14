@@ -11,3 +11,6 @@ build/
 # Release signing secrets — never commit these.
 sample/release.keystore.jks
 sample/keystore.properties
+
+# Per-developer backend URL / site keys for the sample app -- never commit these.
+sample/roas.properties

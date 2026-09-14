@@ -318,7 +318,24 @@ mavenPublishing {
         //       IP it compares — previously with nothing in the row to say
         //       so. Deliberately tri-state; NULL means "never found out",
         //       which is not "no VPN".
-        version = "0.1.7",
+        //
+        // 0.1.7: handleDeepLink stamps referrer_source="deeplink", as
+        //   Roas.swift always did, so one user action no longer lands in two
+        //   buckets across the two platforms. Pushed to origin/main, never
+        //   published to Central.
+        //
+        // 0.1.8: verifyPurchase(purchaseToken, productId, isSubscription) —
+        //   the Android twin of the iOS 0.1.9 `verifyPurchase(transactionId:)`.
+        //   Names a Play Billing receipt to POST /api/tracking/mobile/purchase
+        //   so the server can book it against the Play Developer API NOW
+        //   instead of waiting on the RTDN; asserts no amount. The RN bridge
+        //   already calls this signature. Not 0.1.9 on purpose: a mavenLocal
+        //   0.1.9 built from a stale 0.1.5 tree exists on developer machines,
+        //   and Gradle would keep serving that cached AAR under the same
+        //   coordinates — a fresh number is the only way to be sure a consumer
+        //   gets THIS build. Unpublished; Central stays at 0.1.6 until the RN
+        //   0.1.6 verification round is over.
+        version = "0.1.8",
     )
 
     pom {

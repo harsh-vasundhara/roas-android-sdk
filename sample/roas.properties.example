@@ -1,0 +1,26 @@
+# Copy to roas.properties (gitignored) and fill in. Read by sample/build.gradle.kts
+# into BuildConfig so nothing environment-specific is hardcoded in MainActivity.
+#
+# Every value here comes from the customer panel: Setup -> your app property.
+
+# Your backend, reachable FROM THE PHONE.
+#   Android emulator          -> http://10.0.2.2:8000   (the emulator's alias for the PC's localhost)
+#   Physical phone, same Wi-Fi -> http://<your PC's LAN IP>:8000, with Django started as
+#                                 python manage.py runserver 0.0.0.0:8000  (and the port allowed
+#                                 through the firewall)
+#   A tunnel (ngrok etc.)     -> the https URL it prints
+roas.baseUrl=http://10.0.2.2:8000
+
+# The app property's public key (Site with platform=android).
+roas.publicKey=
+
+# The app property's signing secret (Setup -> Android -> "signing secret"). Leave
+# blank to send unsigned beacons — the server tolerates that while
+# require_signed_beacons is off, but a real integration should always sign, and
+# a blank here means the signed path is NOT being exercised by this sample.
+roas.appSecret=
+
+# RevenueCat's public Google API key for this project (RevenueCat -> Project
+# settings -> API keys). Not ours — leave blank to run the sample without RevenueCat;
+# the "Verify purchase" button still works with a token pasted from anywhere.
+roas.revenueCatApiKey=

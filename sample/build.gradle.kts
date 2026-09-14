@@ -16,6 +16,23 @@ val keystoreProperties = Properties().apply {
     }
 }
 
+// Backend URL + site keys for THIS developer's test setup, from roas.properties
+// (gitignored; see roas.properties.example). They reach MainActivity as
+// BuildConfig constants so a LAN IP or a site key is never hardcoded in source —
+// the previous hardcoded values went stale the moment the PC changed networks
+// and pointed every fresh clone at a backend that no longer existed.
+val roasPropertiesFile = file("roas.properties")
+val roasProperties = Properties().apply {
+    if (roasPropertiesFile.exists()) {
+        roasPropertiesFile.inputStream().use { load(it) }
+    }
+}
+fun roasProp(key: String, default: String = ""): String =
+    (roasProperties.getProperty(key) ?: default).trim()
+// A Kotlin string literal for BuildConfig — quoted and escaped, never raw.
+fun quoted(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 android {
     namespace = "com.roassensor.sample"
     compileSdk = 34
@@ -27,6 +44,15 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+
+        buildConfigField("String", "ROAS_BASE_URL", quoted(roasProp("roas.baseUrl", "http://10.0.2.2:8000")))
+        buildConfigField("String", "ROAS_PUBLIC_KEY", quoted(roasProp("roas.publicKey")))
+        buildConfigField("String", "ROAS_APP_SECRET", quoted(roasProp("roas.appSecret")))
+        buildConfigField("String", "REVENUECAT_API_KEY", quoted(roasProp("roas.revenueCatApiKey")))
+    }
+    buildFeatures {
+        // AGP 8 no longer generates BuildConfig unless asked.
+        buildConfig = true
     }
     signingConfigs {
         if (keystorePropertiesFile.exists()) {

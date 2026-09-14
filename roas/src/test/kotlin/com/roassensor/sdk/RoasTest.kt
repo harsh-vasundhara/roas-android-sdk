@@ -207,6 +207,67 @@ class RoasTest {
         assertNoMoreRequests()
     }
 
+    // ── verifyPurchase: names a Play receipt, never an amount ─────────────────
+
+    @Test
+    fun `verifyPurchase posts the receipt to mobile-purchase with no amount field`() {
+        seedReturningInstall()
+        Roas.initialize(app, publicKey = "site-key", baseUrl = baseUrl())
+        drainSessionStart()
+
+        Roas.verifyPurchase("tok.abc123", "premium_monthly", isSubscription = true)
+
+        val request = takeRequest()
+        assertEquals("/api/tracking/mobile/purchase", request.path)
+        val body = JSONObject(request.body.readUtf8())
+        assertEquals("site-key", body.getString("site"))
+        assertEquals("android", body.getString("platform"))
+        assertEquals("tok.abc123", body.getString("purchase_token"))
+        assertEquals("premium_monthly", body.getString("product_id"))
+        assertTrue(body.getBoolean("is_subscription"))
+        // The server-side serializer requires a vid — it is what links the
+        // receipt to this install when Play's own buyer link is blank.
+        assertTrue(body.getString("vid").isNotEmpty())
+        // The whole point of this call: the client can NAME a receipt but
+        // never assert what it was worth. If an amount ever rides along here,
+        // the trust boundary in MobilePurchaseView has been crossed.
+        assertFalse(body.has("amount"))
+        assertFalse(body.has("currency"))
+        assertNoMoreRequests()
+    }
+
+    @Test
+    fun `verifyPurchase defaults to a one-time product`() {
+        seedReturningInstall()
+        Roas.initialize(app, publicKey = "site-key", baseUrl = baseUrl())
+        drainSessionStart()
+
+        Roas.verifyPurchase("tok.abc123", "coins_100")
+
+        assertFalse(takeRequestBody().getBoolean("is_subscription"))
+        assertNoMoreRequests()
+    }
+
+    @Test
+    fun `verifyPurchase with a blank token or product id sends nothing`() {
+        // The serializer would 400 either one; refusing client-side saves a
+        // round trip that could never verify anything.
+        seedReturningInstall()
+        Roas.initialize(app, publicKey = "site-key", baseUrl = baseUrl())
+        drainSessionStart()
+
+        Roas.verifyPurchase("", "coins_100")
+        Roas.verifyPurchase("tok.abc123", "   ")
+
+        assertNoMoreRequests()
+    }
+
+    @Test
+    fun `verifyPurchase before initialize is a no-op, not a crash`() {
+        Roas.verifyPurchase("tok.abc123", "coins_100")
+        assertNoMoreRequests()
+    }
+
     // ── Returning-user session-start + idempotent initialize ───────────────────
 
     @Test

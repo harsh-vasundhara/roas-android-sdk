@@ -18,12 +18,32 @@
         android:label="ROAS Sample"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.DarkActionBar">
+        <!-- singleTop so a deep link that arrives while the app is already open
+             lands in onNewIntent() on the SAME activity instead of stacking a
+             second one — which is the case handleDeepLink() exists for (an app
+             that is already installed being opened through a tracking link). -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- The deep link this sample answers to. Fire one from a shell to
+                 exercise Roas.handleDeepLink() end to end (see README, "Testing
+                 on a device"). The component is named explicitly because the
+                 Flutter and RN samples claim the same scheme, and a bare VIEW
+                 intent on a device that has one of them installed opens the
+                 system "Open with" chooser instead of this app. The SDK forwards
+                 the full query string as install_referrer and the server lifts
+                 rsclid / utm_* / rs_* out of it, exactly as it would from a
+                 Play install referrer. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="roassample" android:host="open" />
             </intent-filter>
         </activity>
     </application>

@@ -383,6 +383,43 @@ object Roas {
     }
 
     /**
+     * Ask the server to VERIFY a purchase against the Play Developer API's own
+     * records the moment Play Billing reports it — rather than waiting on the
+     * asynchronous Real-Time Developer Notification, which can lag minutes
+     * behind. This never asserts revenue: it only NAMES a receipt (a purchase
+     * token + product id), the same way [track] never asserts revenue for a
+     * funnel event. The collector calls the Play Developer API itself and
+     * books whatever amount IT reports back — a client-supplied amount has
+     * nowhere to go in this call at all, and the server dedupes against the
+     * RTDN for the same order, so whichever arrives first wins and the other
+     * is a no-op.
+     *
+     * Call it once `purchase.purchaseState == Purchase.PurchaseState.PURCHASED`
+     * (or from RevenueCat's purchase callback, which only fires once settled) —
+     * calling it before Play has settled the purchase just gets back "could
+     * not verify" and wastes the round trip. Fire-and-forget, like every other
+     * beacon here: the outcome surfaces through [setOnDeliveryResult] for
+     * `/api/tracking/mobile/purchase`, and a 422 there means Play did not
+     * recognise the receipt for this app's package.
+     *
+     * @param purchaseToken  Play Billing's token for this purchase (`Purchase.purchaseToken`)
+     * @param productId      the SKU / subscription id this purchase was for
+     * @param isSubscription true for a subscription, false for a one-time product
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun verifyPurchase(purchaseToken: String, productId: String, isSubscription: Boolean = false) {
+        if (!initialized) return
+        if (purchaseToken.isBlank() || productId.isBlank()) return
+        val body = baseBody()
+            .put("platform", "android")
+            .put("purchase_token", purchaseToken)
+            .put("product_id", productId)
+            .put("is_subscription", isSubscription)
+        transport.send("/api/tracking/mobile/purchase", body)
+    }
+
+    /**
      * Forward a direct deep link (an Android App Link that opened this app
      * while it was already installed) so its campaign context attributes this
      * open deterministically — the Android twin of `Roas.swift`'s

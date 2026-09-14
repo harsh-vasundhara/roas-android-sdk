@@ -15,13 +15,17 @@ Published as an AAR on Maven Central (as of 2026-07-28), module `:roas`:
 
 ```kotlin
 dependencies {
-    implementation("com.roassensor:roas:0.1.2")
+    implementation("com.roassensor:roas:0.1.6")
 }
 ```
 
-> 0.1.1 is the newest version on Maven Central (since 2026-08-03). **0.1.2 is
-> not published yet** — until it is, resolve it from `mavenLocal()` after
-> running `./gradlew :roas:publishToMavenLocal` here.
+> **0.1.6 is the newest version on Maven Central**, and is what the customer
+> panel's Setup page prints and what the Flutter and React Native bridges pin.
+> This tree is ahead of it: 0.1.7 (deep-link `referrer_source`) and 0.1.8
+> (`verifyPurchase`) are unpublished. To try them in a host app, run
+> `./gradlew :roas:publishToMavenLocal` here and resolve from `mavenLocal()` —
+> and bump the version first if you change anything, because Gradle keeps
+> serving a cached AAR for a version number it has already seen.
 
 Requires `minSdk 21`. Play Services (`play-services-ads-identifier`) is optional —
 without it the SDK still works, just referrer-only (no GAID).
@@ -47,6 +51,15 @@ Roas.identify(email = "buyer@example.com")
 // Funnel events (never revenue)
 Roas.track(RoasEvent.ADD_TO_CART, properties = mapOf("sku" to "ABC", "qty" to 1))
 Roas.track(RoasEvent.CUSTOM, name = "boss_defeated")
+
+// An app that is ALREADY installed being opened through a tracking link:
+// forward the link so the open attributes (Activity.onCreate / onNewIntent)
+intent?.dataString?.let { Roas.handleDeepLink(it) }
+
+// Purchases (0.1.8+): name the Play receipt the moment Billing settles it. The
+// server verifies it against the Play Developer API and books whatever amount
+// PLAY reports — nothing here can assert a value. Dedupes against the RTDN.
+Roas.verifyPurchase(purchase.purchaseToken, productId, isSubscription = true)
 
 // Attribute purchases: pass the vid to RevenueCat as the app user id
 Purchases.configure(
@@ -93,12 +106,56 @@ subscriber attribute.
 
 ```bash
 cd sdk-android
-./gradlew :roas:testDebugUnitTest   # runs the JVM hash-parity tests
+./gradlew :roas:testDebugUnitTest   # JVM suite: hash/HMAC parity, referrer fallbacks, Robolectric Roas lifecycle
 ./gradlew :roas:assembleRelease     # builds the AAR
+./gradlew :sample:assembleDebug     # the test app (needs sample/roas.properties, below)
 ```
 
-Open the folder in Android Studio to develop. The hash-parity tests are pure JVM
-(no device/emulator needed) and are the guard that keeps identity matching working.
+Open the folder in Android Studio to develop. The suite is pure JVM (no
+device/emulator needed): the parity tests are the guard that keeps identity
+matching working, and `RoasTest` drives the real `Roas` object against a local
+`MockWebServer` so install / session / deep-link / purchase beacons are asserted
+byte-for-byte.
+
+### Testing on a device
+
+The `:sample` app exercises every path the Flutter and React Native samples do,
+so a green run here means the native SDK is proven to the same standard.
+
+1. `cp sample/roas.properties.example sample/roas.properties` and fill in the
+   backend URL, the app property's public key and its **signing secret** (both on
+   the panel's Setup page). Leave the secret blank and the beacons go out
+   unsigned — accepted while `require_signed_beacons` is off, but then the
+   signed path is not being tested.
+2. `./gradlew :sample:installDebug`, launch it. The screen echoes every delivery
+   (`✓ /api/tracking/mobile/first-open`), and `adb logcat -s RoasSensor` shows
+   the HTTP status per beacon.
+3. Deep link (the already-installed-user case):
+   ```bash
+   adb shell 'am start -n com.roassensor.sample/.MainActivity -a android.intent.action.VIEW      -d "roassample://open?rsclid=TEST123&utm_source=meta&rs_campaign=summer_sale"'
+   ```
+   (`-n` matters: the Flutter/RN samples claim the same scheme, and without it a
+   device with either installed shows an "Open with" chooser.)
+4. Tap the event / identify buttons. "Verify purchase" takes any Play purchase
+   token + product id; a real one needs the site's Play service account
+   configured, a fake one proves the signed path end to end and comes back 422
+   ("Could not verify this purchase with Google Play"), which is the correct
+   answer for a receipt Play does not recognise.
+
+What to expect in the database for one run, all on the same `vid`, all
+`signed=True`, `sdk_version` = this tree's version:
+
+| Action | Row |
+| --- | --- |
+| first launch | `TouchPoint` `install`, `referrer_source=google`, `OK_ORGANIC` on an emulator |
+| deep link | `TouchPoint` `app_open`, `referrer_source=deeplink`, `click_id=TEST123`, `utm_source=meta` |
+| track buttons | `Event` `add_to_cart`, `begin_checkout` |
+| identify | the email hash joins the vid's `Identity` |
+| verify purchase | 201 + a `Conversion` for a real receipt; 422 for a fake one |
+
+The Play Install Referrer itself cannot be exercised by a sideloaded build —
+`docs/play-console-testing.md` is the runbook for that (internal testing track +
+a real tracking-link click).
 
 ## Diagnosing an install that didn't attribute
 
